@@ -1,6 +1,7 @@
 {
   "logicSize": { "w": 960, "h": 540 },
   "graceSec": 3,
+
   "player": {
     "speed": 280,
     "slow": 120,
@@ -10,7 +11,9 @@
     "glow": false,
     "outline": false
   },
+
   "bullets": { "baseR": 9, "hitR": 3, "outline": true },
+
   "spawns": {
     "rowEvery": 6.6,
     "sineEvery": 12.0,
@@ -20,12 +23,14 @@
     "ringEvery": 8.0,
     "kanjiEvery": 5.0
   },
+
   "background": {
     "image": "assets/img/bg_mechcity_loop.png",
     "scrollSpeed": 40,
     "loop": true,
     "height": 1080
   },
+
   "zones": {
     "safeH": 36,
     "safeCols": 4,
@@ -37,6 +42,7 @@
       "limitToPlayArea": true
     }
   },
+
   "kanji": {
     "visualR": 84,
     "rubyColor": "#f00",
@@ -50,7 +56,9 @@
       { "k": "重複", "f": "ちょうふく" }
     ]
   },
+
   "score": { "perSec": 100, "bonusPerSec": 1000, "penaltyPerSec": 1000, "milestone": 2000 },
+
   "rank": [
     { "name": "Bronze",   "min": 10000,  "medal": "assets/img/medal_bronze.png" },
     { "name": "Silver",   "min": 30000,  "medal": "assets/img/medal_silver.png" },
@@ -58,6 +66,7 @@
     { "name": "Platinum", "min": 100000, "medal": "assets/img/medal_platinum.png" },
     { "name": "Diamond",  "min": 150000, "medal": "assets/img/medal_diamond.png" }
   ],
+
   "audio": {
     "volumes": { "master": 0.8, "bgm": 0.5, "sfx": 0.9 },
     "crossfadeMs": 400,
@@ -77,6 +86,7 @@
       "explode":    ["assets/audio/sfx_explode.ogg",     "assets/audio/sfx_explode.mp3"]
     }
   },
+
   "ui": {
     "sprites": {
       "safe": "assets/img/zone_safe.png",
@@ -94,17 +104,23 @@
     },
     "positions": {
       "score": { "xFromRight": 12, "y": 12 },
-      "best": { "x": 12, "y": 40 },
-      "time": { "x": 12, "y": 58 }
+      "best":  { "x": 12, "y": 40 },
+      "time":  { "x": 12, "y": 58 }
     }
   },
+
   "difficulty": {
     "base": 0.6,
     "gainPerSec": 0.08,
     "caps": { "speedMul": 2.0, "countMul": 2.0 }
   },
+
   "tuning": {
     "bulletSpeedScale": 0.7,
     "bulletCountScale": 1.5
+  },
+
+  "rankApi": {
+    "endpoint": "" 
   }
 }
