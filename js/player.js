@@ -1,4 +1,4 @@
-// player.js — スプライトあり=光輪OFF / なければ発光プレースホルダ
+// player.js — スプライト表示時は光輪OFF。未読込なら発光円で必ず見える。
 export class Player {
   constructor(config) {
     this.cfg = config.player;
@@ -29,8 +29,7 @@ export class Player {
   }
 
   update(dt, input) {
-    const useSlow = input.isSlow(0);
-    const speed = useSlow ? this.slow : this.speed;
+    const speed = input.isSlow(0) ? this.slow : this.speed;
 
     if (input.ptrDown) {
       const k = 12;
@@ -54,8 +53,6 @@ export class Player {
 
   draw(g) {
     const r = this.size / 2;
-
-    // スプライト未読込 もしくは config.glow === true のときだけ光らせる
     const showGlow = (!this.sprite) || (this.cfg.glow === true);
     if (showGlow) {
       g.save();
