@@ -1,11 +1,13 @@
-// main.js — 背景 + 自機 + 弾幕 + 当たり判定（タイトル中はTIME=0固定）
-import { AudioManager }   from "./audioManager.js?v=danmaku1";
-import { Input }          from "./input.js?v=danmaku1";
-import { Player }         from "./player.js?v=danmaku1";
-import { Bullet, BULLET_TYPES, loadBulletSprites } from "./bullets.js?v=danmaku1";
-import { Spawner }        from "./spawner.js?v=danmaku1";
+// main.js — 背景 + 自機 + 弾幕 + 当たり判定（GRACE修正）
+// ※ 内部importに v=danmaku2 を付けてキャッシュを確実に無効化
+import { AudioManager }   from "./audioManager.js?v=danmaku2";
+import { Input }          from "./input.js?v=danmaku2";
+import { Player }         from "./player.js?v=danmaku2";
+import { loadBulletSprites } from "./bullets.js?v=danmaku2";
+import { Spawner }        from "./spawner.js?v=danmaku2";
 
 const STARTS_ON_FIRST_TAP = true;
+const W = 960, H = 540;
 
 let canvas, g, config, aud, input, player, spawner;
 let state = "title";
@@ -15,8 +17,8 @@ let score = 0;
 let bgY = 0, bgImg;
 let unlocked = false;
 let bullets = [];
+let showDebug = false;
 
-const W = 960, H = 540;
 const isPlaying = () => state === "playing" || state === "safe" || state === "bonus";
 
 function fitCanvas() {
@@ -45,10 +47,8 @@ function drawUI() {
   g.shadowColor = "#001a33"; g.shadowBlur = 4; g.shadowOffsetX = 2; g.shadowOffsetY = 2;
   const elapsed = isPlaying() ? gameTime : 0;
 
-  // スコア（とりあえず毎秒+100だけ入れて見える化）
   g.textAlign = "right";
   g.fillText(`SCORE ${String(Math.floor(score)).padStart(6, "0")}`, W - 12, 12 + 28);
-
   g.textAlign = "left";
   g.fillText(`TIME ${elapsed.toFixed(1)}s`, 12, 58);
 
@@ -71,6 +71,16 @@ function drawUI() {
     g.font = "400 16px Noto Sans JP, system-ui";
     g.fillText("タップでタイトルへ", W/2, H/2 + 20);
   }
+
+  if (showDebug) {
+    g.save();
+    g.shadowBlur = 0;
+    g.fillStyle = "rgba(255,255,255,0.8)";
+    g.font = "400 12px system-ui";
+    g.textAlign = "left";
+    g.fillText(`state=${state} bullets=${bullets.length.toString()}`, 12, H - 12);
+    g.restore();
+  }
 }
 
 function setupInput() {
@@ -87,6 +97,7 @@ function setupInput() {
   addEventListener("keydown", (e) => {
     if (e.key === "Enter" && state === "title") startGame();
     if (e.key === "Escape" && state === "gameover") toTitle();
+    if (e.key.toLowerCase() === "d") showDebug = !showDebug; // デバッグ表示切替
     if (e.key === "s" && isPlaying()) { state = "safe";  aud.playBgm("safe"); }
     if (e.key === "b" && isPlaying()) { state = "bonus"; aud.playBgm("bonus"); }
     if (e.key === "g" && isPlaying()) { gameOver(); }
@@ -99,13 +110,12 @@ function startGame() {
   bullets = [];
   spawner.reset();
   aud.playBgm("normal");
-  // （任意）開始SFX： if (config.audio?.sfx?.start) aud.playSfx(config.audio.sfx.start);
 }
 
 function toTitle() {
   state = "title";
   bullets = [];
-  aud.playBgm("safe"); // タイトル曲的に
+  aud.playBgm("safe");
 }
 
 function gameOver() {
@@ -115,24 +125,24 @@ function gameOver() {
 }
 
 function updateBullets(dt) {
-  // 発生
   spawner.update(dt, gameTime, bullets, player);
 
   // 移動＆当たり判定
   const px = player.x, py = player.y, ph = player.hitR;
   for (let i = bullets.length - 1; i >= 0; i--) {
     const b = bullets[i];
+    // update内で誘導の向きが決まる
     b.update(dt, player);
 
-    // 衝突：当たり半径判定
+    // 衝突
     const dx = b.x - px, dy = b.y - py;
     if (dx * dx + dy * dy < (b.hitR + ph) * (b.hitR + ph)) {
       gameOver();
-      return; // 即終了
+      return;
     }
 
     // 画面外で破棄
-    if (b.outOfBounds(W, H, 40)) {
+    if (b.x < -40 || b.x > W + 40 || b.y < -40 || b.y > H + 40) {
       bullets.splice(i, 1);
     }
   }
@@ -145,7 +155,7 @@ function loop(ts) {
 
   if (isPlaying()) {
     gameTime += dt;
-    score += (config.score?.perSec ?? 100) * dt; // とりあえず見える化
+    score += (config.score?.perSec ?? 100) * dt;
     updateBullets(dt);
     player.update(dt, input);
   }
@@ -153,9 +163,7 @@ function loop(ts) {
   // 描画
   g.fillStyle = "#000"; g.fillRect(0, 0, W, H);
   if (bgImg) drawBG(dt);
-
-  // 弾 → 自機 → UI の順で描画（自機が上）
-  for (const b of bullets) b.draw(g);
+  for (const b of bullets) b['draw'](g);
   player.draw(g);
   drawUI();
 
@@ -170,18 +178,15 @@ export async function boot(conf) {
 
   aud = new AudioManager(config);
 
-  // 背景
   try { bgImg = await loadImage(config.background.image); } catch (e) { console.warn("bg load failed:", e); }
 
-  // プレイヤー
   player = new Player(config);
   player.load().catch(e => console.warn("[player] load error (fallback active)", e));
 
-  // 弾
   await loadBulletSprites();
   spawner = new Spawner(config);
 
   setupInput();
   requestAnimationFrame(loop);
-  console.log("[boot] danmaku ready");
+  console.log("[boot] danmaku2 ready");
 }
