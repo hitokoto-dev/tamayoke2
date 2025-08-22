@@ -1,1 +1,80 @@
+{
+  "logicSize": { "w": 960, "h": 540 },
+  "graceSec": 3,
+
+  "player": { "speed": 280, "slow": 120, "size": 22, "hitR": 4, "sprite": "/assets/img/player.png" },
+
+  "bullets": { "baseR": 9, "hitR": 3, "outline": true },
+
+  "spawns": {
+    "rowEvery": 6.6,
+    "sineEvery": 12.0,
+    "rainEvery": 3.8,
+    "sideEvery": 1.8,
+    "fanEvery": 3.2,
+    "ringEvery": 9.0,
+    "kanjiEvery": 5.0
+  },
+
+  "background": {
+    "image": "/assets/img/bg_mechcity_loop.png",
+    "scrollSpeed": 40,
+    "loop": true,
+    "height": 1080
+  },
+
+  "zones": {
+    "safeH": 36,
+    "safeCols": 4,
+    "centerR": 90,
+    "bonusMove": {
+      "mode": "orbit",
+      "orbit": { "center": { "x": 0.5, "y": 0.5 }, "radius": 120, "degPerSec": 24 },
+      "spinDegPerSec": 35,
+      "limitToPlayArea": true
+    }
+  },
+
+  "kanji": {
+    "visualR": 84,
+    "rubyColor": "#f00",
+    "maxR": 96,
+    "paddingRate": 0.12,
+    "rubyRate": 0.28,
+    "lineGapRate": 0.16,
+    "list": [
+      { "k": "雰囲気", "f": "ふんいき" },
+      { "k": "早急", "f": "さっきゅう" },
+      { "k": "重複", "f": "ちょうふく" }
+    ]
+  },
+
+  "score": {
+    "perSec": 100,
+    "bonusPerSec": 1000,
+    "penaltyPerSec": 1000,
+    "milestone": 2000
+  },
+
+  "rank": [
+    { "name": "Bronze",   "min": 10000,  "medal": "/assets/img/medal_bronze.png" },
+    { "name": "Silver",   "min": 30000,  "medal": "/assets/img/medal_silver.png" },
+    { "name": "Gold",     "min": 60000,  "medal": "/assets/img/medal_gold.png" },
+    { "name": "Platinum", "min": 100000, "medal": "/assets/img/medal_platinum.png" },
+    { "name": "Diamond",  "min": 150000, "medal": "/assets/img/medal_diamond.png" }
+  ],
+
+  "audio": {
+    "volumes": { "master": 0.8, "bgm": 0.5, "sfx": 0.9 },
+    "crossfadeMs": 400,
+    "bgm": {
+      "normal": {
+        "src": ["/assets/audio/bgm_stage1.ogg", "/assets/audio/bgm_stage1.mp3"],
+        "loopStart": 0.8,
+        "loopEnd": 12.8
+      },
+      "bonus": {
+        "src": ["/assets/audio/bgm_stage1.ogg", "/assets/audio/bgm_stage1.mp3"],
+        "loopStart": 8.8,
+        "loopEnd":
 
