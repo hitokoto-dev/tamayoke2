@@ -17,10 +17,10 @@
   "spawns": {
     "rowEvery": 6.6,
     "sineEvery": 12.0,
-    "rainEvery": 3.8,
-    "sideEvery": 1.8,
-    "fanEvery": 3.2,
-    "ringEvery": 9.0,
+    "rainEvery": 3.0,
+    "sideEvery": 1.4,
+    "fanEvery": 2.6,
+    "ringEvery": 8.0,
     "kanjiEvery": 5.0
   },
 
@@ -109,5 +109,7 @@
     }
   },
 
-  "difficulty": { "base": 0.6, "gainPerSec": 0.08, "caps": { "speedMul": 2.0, "countMul": 1.6 } }
-}
+  "difficulty": {
+    "base": 0.6,
+    "gainPerSec": 0.08,
+    "caps": { "speedMul": 2.0, "countMul": 2
