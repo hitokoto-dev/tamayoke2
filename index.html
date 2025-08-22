@@ -19,8 +19,9 @@
   <div id="err"><pre id="errtxt"></pre></div>
 
   <script type="module">
-    // ▼ この文字を変えるだけで、main.js も中の全モジュールも確実に更新されます
-    const V = "zl6";
+    // ★ここを変えるだけで、すべてのモジュール/画像/音源のキャッシュを確実に更新
+    const V = "kanji1";
+    window.__APP_VERSION__ = V; // 音や画像のfetchでも同じVを付ける
 
     const showErr = (e) => {
       const box = document.getElementById('err');
@@ -29,7 +30,7 @@
       box.style.display = 'flex';
       console.error(e);
     };
-    window.addEventListener('error',   ev => showErr(ev.error || ev.message));
+    window.addEventListener('error', ev => showErr(ev.error || ev.message));
     window.addEventListener('unhandledrejection', ev => showErr(ev.reason || ev));
 
     const withV = (src) => src + (src.includes("?") ? "&" : "?") + "v=" + V;
@@ -42,7 +43,6 @@
         await document.fonts.ready;
 
         const mod = await import(withV("./js/main.js"));
-        // V を渡すことで、main.js 側もサブモジュールに同じ V を適用できます
         mod.boot(conf, V);
       } catch (e) {
         showErr(e);
