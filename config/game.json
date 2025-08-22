@@ -2,14 +2,15 @@
   "logicSize": { "w": 960, "h": 540 },
   "graceSec": 3,
 
-"player": {
-  "speed": 280,
-  "slow": 120,
-  "size": 56,                // ← 22 → 56 にアップ（36/48/56 好みでOK）
-  "hitR": 4,
-  "sprite": "assets/img/player.png",
-  "glow": false              // ← 光る背景を消す
-}
+  "player": {
+    "speed": 280,
+    "slow": 120,
+    "size": 56,
+    "hitR": 4,
+    "sprite": "assets/img/player.png",
+    "glow": false
+  },
+
   "bullets": { "baseR": 9, "hitR": 3, "outline": true },
 
   "spawns": {
