@@ -12,14 +12,14 @@
 <body>
   <canvas id="game" width="960" height="540"></canvas>
   <script type="module">
-    import { boot } from "./js/main.js";
-    (async () => {
-      const res = await fetch("./config/game.json?v=" + Date.now());
-      if (!res.ok) throw new Error("config fetch failed: " + res.status);
-      const conf = await res.json();
-      await document.fonts.ready;
-      boot(conf);
-    })();
-  </script>
+  // 毎回最新を読む
+  const res = await fetch("./config/game.json?v=" + Date.now());
+  if (!res.ok) throw new Error("config fetch failed: " + res.status);
+  const conf = await res.json();
+  await document.fonts.ready;
+
+  const mod = await import("./js/main.js?v=" + Date.now());
+  mod.boot(conf);
+</script>
 </body>
 </html>
