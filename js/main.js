@@ -1,7 +1,7 @@
-// main.js — 背景 + 自機（移動/低速）まで
-import { AudioManager } from "./audioManager.js";
-import { Input } from "./input.js";
-import { Player } from "./player.js";
+// main.js — 背景 + 自機（移動）/ タイトル中はTIME 0固定
+import { AudioManager } from "./audioManager.js?v=ship2";
+import { Input }        from "./input.js?v=ship2";
+import { Player }       from "./player.js?v=ship2";
 
 const STARTS_ON_FIRST_TAP = true;
 
@@ -50,7 +50,7 @@ function drawUI() {
     g.textAlign = "center";
     g.fillText("Tap to Start", 480, 280);
     g.font = "400 16px Noto Sans JP, system-ui";
-    g.fillText("ドラッグ／WASD／矢印キーで移動。Shift/Space/2本指で低速。", 480, 310);
+    g.fillText("ドラッグ／WASD／矢印で移動。Shift/Spaceで低速。", 480, 310);
   }
 }
 
@@ -84,14 +84,13 @@ function loop(ts) {
   last = ts;
   if (isPlaying()) gameTime += dt;
 
-  // 画面クリア＆背景
   g.fillStyle = "#000"; g.fillRect(0, 0, canvas.width, canvas.height);
   if (bgImg) drawBG(dt);
 
-  // === 自機 ===
+  // 自機
   if (player) {
-    if (isPlaying()) player.update(dt, input, (navigator.maxTouchPoints ? 1 : 0) + 0 /* 実装簡略化 */);
-    player.draw(g);
+    if (isPlaying()) player.update(dt, input); // タイトル中は位置固定
+    player.draw(g); // タイトル中も見えるように描く
   }
 
   drawUI();
@@ -106,12 +105,13 @@ export async function boot(conf) {
 
   aud = new AudioManager(config);
 
-  // 背景と自機スプライト
   try { bgImg = await loadImage(config.background.image); } catch { console.warn("bg load failed"); }
-  player = new Player(config);
-player.load().catch(e => console.warn("[player] load error (fallback active)", e)); // ← awaitしない
 
+  player = new Player(config);
+  // 読み込み失敗でも続行（プレースホルダで表示）
+  player.load().catch(e => console.warn("[player] load error (fallback active)", e));
 
   setupInput();
   requestAnimationFrame(loop);
+  console.log("[boot] main.js ship2 loaded", conf.player);
 }
