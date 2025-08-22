@@ -7,17 +7,36 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@700&family=Noto+Sans+JP:wght@400;700&display=swap" rel="stylesheet">
-  <style>body{margin:0;background:#000;color:#fff}canvas{display:block;margin:auto}</style>
+  <style>
+    body{margin:0;background:#000;color:#fff;font-family:system-ui, -apple-system, "Noto Sans JP", sans-serif}
+    #err{position:fixed;inset:0;display:none;align-items:center;justify-content:center;padding:16px;background:#000}
+    #err pre{max-width:960px;white-space:pre-wrap;word-break:break-word;background:#111;padding:12px;border-radius:8px}
+    canvas{display:block;margin:auto}
+  </style>
 </head>
 <body>
   <canvas id="game" width="960" height="540"></canvas>
+  <div id="err"><pre id="errtxt"></pre></div>
+
   <script type="module">
     import { boot } from "./js/main.js";
+    const showErr = (msg) => { 
+      const el = document.getElementById('err'); 
+      document.getElementById('errtxt').textContent = msg; 
+      el.style.display = 'flex';
+      console.error(msg);
+    };
     (async () => {
-      const res = await fetch("./config/game.json");
-      const conf = await res.json();
-      await document.fonts.ready;
-      boot(conf);
+      try {
+        // ここは相対パス！ 404なら真っ黒になります
+        const res = await fetch("./config/game.json?v=" + Date.now());
+        if (!res.ok) throw new Error("config fetch failed: " + res.status + " " + res.statusText);
+        const conf = await res.json();
+        await document.fonts.ready;
+        boot(conf);
+      } catch (e) {
+        showErr("初期化に失敗しました：\n" + (e?.stack || e));
+      }
     })();
   </script>
 </body>
