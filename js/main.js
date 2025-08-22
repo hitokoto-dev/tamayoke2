@@ -1,12 +1,14 @@
-// main.js  — title中はTIMEを0固定・開始時に0からカウント
+// main.js — 背景 + 自機（移動/低速）まで
 import { AudioManager } from "./audioManager.js";
+import { Input } from "./input.js";
+import { Player } from "./player.js";
 
 const STARTS_ON_FIRST_TAP = true;
 
-let canvas, g, config, aud;
-let state = "title";          // "title" | "playing" | "safe" | "bonus" | "gameover"
-let last = 0;                 // 前フレームのtimestamp(ms)
-let gameTime = 0;             // ★プレイ中のみ加算（秒）
+let canvas, g, config, aud, input, player;
+let state = "title";
+let last = 0;
+let gameTime = 0;
 let bgY = 0, bgImg;
 let unlocked = false;
 
@@ -20,19 +22,13 @@ function fitCanvas() {
 }
 
 function loadImage(src) {
-  return new Promise((res, rej) => {
-    const im = new Image();
-    im.onload = () => res(im);
-    im.onerror = rej;
-    im.src = src;
-  });
+  return new Promise((res, rej) => { const im = new Image(); im.onload=()=>res(im); im.onerror=rej; im.src=src; });
 }
 
 function drawBG(dt) {
   const speed = config.background.scrollSpeed;
-  const loopH = config.background.height; // 1080
+  const loopH = config.background.height;
   bgY = (bgY + speed * dt) % loopH;
-
   const half = loopH / 2;
   const y1 = Math.floor(-bgY / 2);
   g.drawImage(bgImg, 0, 0, bgImg.width, half, 0, y1, 960, 540);
@@ -43,31 +39,31 @@ function drawUI() {
   g.font = "700 28px Orbitron, system-ui";
   g.fillStyle = "#66aaff";
   g.shadowColor = "#001a33";
-  g.shadowBlur = 4;
-  g.shadowOffsetX = 2;
-  g.shadowOffsetY = 2;
-
-  // ★タイトル中は常に 0.0 表示
+  g.shadowBlur = 4; g.shadowOffsetX = 2; g.shadowOffsetY = 2;
   const elapsed = isPlaying() ? gameTime : 0;
-  g.textAlign = "right";
-  g.fillText(`SCORE 000000`, 960 - 12, 12 + 28);
-  g.textAlign = "left";
-  g.fillText(`TIME ${elapsed.toFixed(1)}s`, 12, 58);
+  g.textAlign = "right"; g.fillText(`SCORE 000000`, 960 - 12, 12 + 28);
+  g.textAlign = "left";  g.fillText(`TIME ${elapsed.toFixed(1)}s`, 12, 58);
+
+  if (state === "title") {
+    g.fillStyle = "rgba(255,255,255,0.9)";
+    g.font = "700 36px Orbitron, system-ui";
+    g.textAlign = "center";
+    g.fillText("Tap to Start", 480, 280);
+    g.font = "400 16px Noto Sans JP, system-ui";
+    g.fillText("ドラッグ／WASD／矢印キーで移動。Shift/Space/2本指で低速。", 480, 310);
+  }
 }
 
 function setupInput() {
+  input = new Input(canvas);
+
   const onTap = async () => {
     if (!unlocked) { await aud.unlock(); unlocked = true; }
-    if (!STARTS_ON_FIRST_TAP && state === "title" && unlocked) {
-      // タイトルBGM流したい場合（safeを利用）
-      aud.playBgm("safe");
-      return; // 次のタップで開始
-    }
+    if (!STARTS_ON_FIRST_TAP && state === "title") { aud.playBgm("safe"); return; }
     if (state === "title") startGame();
   };
   canvas.addEventListener("pointerdown", onTap, { passive: true });
 
-  // デバッグ切替
   addEventListener("keydown", (e) => {
     if (e.key === "Enter" && state === "title") startGame();
     if (e.key === "s" && isPlaying()) { state = "safe";  aud.playBgm("safe"); }
@@ -78,30 +74,24 @@ function setupInput() {
 
 function startGame() {
   state = "playing";
-  gameTime = 0;        // ★開始時に0から
-  last = 0;            // ★時間差の遺産を断つ
+  gameTime = 0; last = 0;
   aud.playBgm("normal");
-  console.log("[state] playing");
 }
 
 function loop(ts) {
   if (!last) last = ts;
   const dt = Math.min(0.05, (ts - last) / 1000);
   last = ts;
-
-  // ★加算はプレイ中のみ
   if (isPlaying()) gameTime += dt;
 
-  // 画面
-  g.fillStyle = "#000";
-  g.fillRect(0, 0, canvas.width, canvas.height);
+  // 画面クリア＆背景
+  g.fillStyle = "#000"; g.fillRect(0, 0, canvas.width, canvas.height);
   if (bgImg) drawBG(dt);
 
-  if (state === "title") {
-    g.fillStyle = "rgba(255,255,255,0.9)";
-    g.font = "700 36px Orbitron, system-ui";
-    g.textAlign = "center";
-    g.fillText("Tap to Start", 480, 280);
+  // === 自機 ===
+  if (player) {
+    if (isPlaying()) player.update(dt, input, (navigator.maxTouchPoints ? 1 : 0) + 0 /* 実装簡略化 */);
+    player.draw(g);
   }
 
   drawUI();
@@ -112,15 +102,14 @@ export async function boot(conf) {
   config = conf;
   canvas = document.getElementById("game");
   g = canvas.getContext("2d");
-  fitCanvas();
-  addEventListener("resize", fitCanvas);
+  fitCanvas(); addEventListener("resize", fitCanvas);
 
   aud = new AudioManager(config);
 
-  try { bgImg = await loadImage(config.background.image); }
-  catch { console.warn("background failed:", config.background.image); }
+  // 背景と自機スプライト
+  try { bgImg = await loadImage(config.background.image); } catch { console.warn("bg load failed"); }
+  player = new Player(config); await player.load();
 
   setupInput();
   requestAnimationFrame(loop);
-  console.log("[boot] main.js v3 loaded");
 }
