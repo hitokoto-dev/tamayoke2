@@ -76,5 +76,56 @@
       "bonus": {
         "src": ["/assets/audio/bgm_stage1.ogg", "/assets/audio/bgm_stage1.mp3"],
         "loopStart": 8.8,
-        "loopEnd":
+        "loopEnd": 20.8
+      },
+      "safe": {
+        "src": ["/assets/audio/bgm_title.ogg", "/assets/audio/bgm_title.mp3"],
+        "loopStart": 1.6,
+        "loopEnd": 18.4
+      },
+      "gameover": {
+        "src": ["/assets/audio/bgm_result.ogg", "/assets/audio/bgm_result.mp3"],
+        "loopStart": 0,
+        "loopEnd": 0,
+        "loop": false
+      }
+    },
+    "sfx": {
+      "start":      ["/assets/audio/sfx_start.ogg",       "/assets/audio/sfx_start.mp3"],
+      "pause":      ["/assets/audio/sfx_pause.ogg",       "/assets/audio/sfx_pause.mp3"],
+      "milestone":  ["/assets/audio/sfx_milestone.ogg",   "/assets/audio/sfx_milestone.mp3"],
+      "zone_safe":  ["/assets/audio/sfx_zone_safe.ogg",   "/assets/audio/sfx_zone_safe.mp3"],
+      "zone_bonus": ["/assets/audio/sfx_zone_bonus.ogg",  "/assets/audio/sfx_zone_bonus.mp3"],
+      "zone_normal":["/assets/audio/sfx_zone_normal.ogg", "/assets/audio/sfx_zone_normal.mp3"],
+      "explode":    ["/assets/audio/sfx_explode.ogg",     "/assets/audio/sfx_explode.mp3"]
+    }
+  },
 
+  "ui": {
+    "sprites": {
+      "safe": "/assets/img/zone_safe.png",
+      "bonus": "/assets/img/zone_bonus.png"
+    },
+    "nineSlice": { "safe": { "left": 8, "right": 8, "top": 6, "bottom": 6 } },
+    "font": {
+      "digitsFamily": "Orbitron",
+      "digitsWeight": 700,
+      "digitsSize": 28,
+      "normalColor": "#66aaff",
+      "bonusColor":  "#ffd84a",
+      "penaltyColor":"#ff4040",
+      "shadow": { "color": "#001a33", "blur": 4, "offsetX": 2, "offsetY": 2 }
+    },
+    "positions": {
+      "score": { "xFromRight": 12, "y": 12 },
+      "best":  { "x": 12, "y": 40 },
+      "time":  { "x": 12, "y": 58 }
+    }
+  },
+
+  "difficulty": {
+    "base": 0.6,
+    "gainPerSec": 0.08,
+    "caps": { "speedMul": 2.0, "countMul": 1.6 }
+  }
+}
