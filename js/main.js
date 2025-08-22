@@ -1,39 +1,41 @@
-// main.js — ローダー方式：同一バージョン V を全モジュール/画像に適用してキャッシュ回避
-// 機能：背景 + 自機 + 弾幕 + 当たり判定 + セーフ/ボーナスゾーン + BGM切替（F2でデバッグ）
-
+// main.js — ローダー方式 + ランキング（GAS）
 export async function boot(conf, V = "") {
   const W = 960, H = 540;
   const withV = (src) => V ? src + (src.includes("?") ? "&" : "?") + "v=" + V : src;
 
-  // ▼ ここが“肝” — すべて動的 import にして同じ V を付与
-  const [{ AudioManager }, { Input }, { Player }, bulletsMod, { Spawner }, zonesMod] =
+  const [{ AudioManager }, { Input }, { Player }, bulletsMod, { Spawner }, zonesMod, { RankClient }] =
     await Promise.all([
       import(withV("./audioManager.js")),
       import(withV("./input.js")),
       import(withV("./player.js")),
-      import(withV("./bullets.js")),   // { loadBulletSprites, BULLET_TYPES, ... }
+      import(withV("./bullets.js")),    // { loadBulletSprites, ... }
       import(withV("./spawner.js")),
-      import(withV("./zones.js")),     // { SafeZones, BonusZone }
+      import(withV("./zones.js")),      // { SafeZones, BonusZone }
+      import(withV("./rank.js")),
     ]);
 
   const { loadBulletSprites } = bulletsMod;
   const { SafeZones, BonusZone } = zonesMod;
 
-  // ---------- ここからゲーム本体（zones版と同等の挙動） ----------
-  const STARTS_ON_FIRST_TAP = true;
-
+  // ====== 状態 ======
   let canvas = document.getElementById("game");
   let g = canvas.getContext("2d");
   let config = conf;
-  let aud, input, player, spawner;
-  let safeZones, bonusZone;
+  let aud, input, player, spawner, safeZones, bonusZone;
 
-  let state = "title"; // "title" | "playing" | "safe" | "bonus" | "gameover"
-  let last = 0, gameTime = 0, score = 0;
-  let bgY = 0, bgImg = null;
-  let unlocked = false;
-  let bullets = [];
-  let showDebug = false;
+  let state = "title";  // "title" | "playing" | "safe" | "bonus" | "gameover"
+  let last = 0, gameTime = 0, score = 0, bgY = 0;
+  let bgImg = null, unlocked = false, bullets = [], showDebug = false;
+
+  // ローカル保存
+  let bestScore = Number(localStorage.getItem("bestScore") || 0);
+  let playerName = localStorage.getItem("playerName") || "";
+
+  // ランキング
+  const rankUrl = config.rankApi?.endpoint || "";
+  const rankClient = new RankClient(rankUrl, V);
+  let topRows = [];
+  async function refreshTop() { topRows = rankClient.enabled ? (await rankClient.getTop()) : []; }
 
   const isPlaying = () => state === "playing" || state === "safe" || state === "bonus";
 
@@ -80,18 +82,53 @@ export async function boot(conf, V = "") {
     g.shadowOffsetY = fontCfg.shadow.offsetY;
 
     const elapsed = isPlaying() ? gameTime : 0;
+
+    // 右上スコア
     g.textAlign = "right";
     g.fillText(`SCORE ${String(Math.floor(score)).padStart(6, "0")}`, W - 12, 12 + 28);
+
+    // 左上 BEST/TIME（TIMEはタイトル/ゲーム時で使い分け）
     g.textAlign = "left";
+    g.fillText(`BEST ${String(Math.floor(bestScore)).padStart(6, "0")}`, 12, 40);
+    g.globalAlpha = 0.55;
     g.fillText(`TIME ${elapsed.toFixed(1)}s`, 12, 58);
+    g.globalAlpha = 1;
 
     if (state === "title") {
-      g.fillStyle = "rgba(255,255,255,0.9)";
+      // タイトル表示
+      g.fillStyle = "rgba(255,255,255,0.92)";
       g.font = "700 36px Orbitron, system-ui";
       g.textAlign = "center";
-      g.fillText("Tap to Start", W/2, H/2);
+      g.fillText("Tap to Start", W/2, H/2 - 6);
       g.font = "400 16px Noto Sans JP, system-ui";
-      g.fillText("ドラッグ／WASD／矢印で移動。Shift/Spaceで低速。F2でデバッグ表示", W/2, H/2 + 30);
+      g.fillText("ドラッグ／WASD／矢印で移動。Shift/Spaceで低速。F2でデバッグ表示", W/2, H/2 + 22);
+
+      // 右側にランキングTop10
+      g.textAlign = "right";
+      g.font = "700 18px Orbitron, system-ui";
+      g.fillStyle = "#ffffff";
+      const titleY = 92;
+      g.fillText("LEADERBOARD", W - 16, titleY);
+      g.font = "400 14px Noto Sans JP, system-ui";
+      const startY = titleY + 18;
+      const lineH = 18;
+      if (!rankClient.enabled) {
+        g.fillText("(未設定: config.rankApi.endpoint)", W - 16, startY);
+      } else if (!topRows.length) {
+        g.fillText("読み込み中… / 未投稿", W - 16, startY);
+      } else {
+        for (let i = 0; i < Math.min(10, topRows.length); i++) {
+          const r = topRows[i];
+          const name = (r.name ?? "—").toString().slice(0, 16);
+          const sc = String(r.score ?? 0).padStart(6, "0");
+          g.fillText(`${(i+1).toString().padStart(2," ")}. ${name}  ${sc}`, W - 16, startY + lineH * (i + 1));
+        }
+      }
+      // プレイヤー名表示
+      g.textAlign = "left";
+      g.font = "400 12px system-ui";
+      const pn = playerName ? `NAME: ${playerName}` : "NAME: （ベスト更新時に入力）";
+      g.fillText(pn, 12, H - 12);
     }
 
     if (state === "gameover") {
@@ -111,7 +148,7 @@ export async function boot(conf, V = "") {
       g.fillStyle = "rgba(255,255,255,0.85)";
       g.font = "400 12px system-ui";
       g.textAlign = "left";
-      g.fillText(`V=${V}  state=${state}  bullets=${bullets.length}`, 12, H - 12);
+      g.fillText(`V=${V}  state=${state}  bullets=${bullets.length}`, 12, H - 28);
       g.restore();
     }
   }
@@ -121,7 +158,6 @@ export async function boot(conf, V = "") {
     const onTap = async () => {
       if (!unlocked) { await aud.unlock(); unlocked = true; }
       if (state === "gameover") { toTitle(); return; }
-      if (!STARTS_ON_FIRST_TAP && state === "title") { aud.playBgm("safe"); return; }
       if (state === "title") startGame();
     };
     canvas.addEventListener("pointerdown", onTap, { passive: true });
@@ -147,25 +183,47 @@ export async function boot(conf, V = "") {
     state = "title";
     bullets = [];
     aud.playBgm("safe");
+    refreshTop(); // タイトルに戻ったらTop10を取り直す
+  }
+  async function maybeSubmitBest(newScore) {
+    if (!rankClient.enabled) return;
+    try {
+      if (!playerName) {
+        const nm = prompt("ランキング名（16文字まで）を入力してください", "YOU");
+        if (!nm) return; // キャンセルなら送信しない
+        playerName = nm.trim().slice(0, 16);
+        localStorage.setItem("playerName", playerName);
+      }
+      const ua = (navigator.userAgent || "").slice(0, 64);
+      await rankClient.submit({ name: playerName, score: Math.floor(newScore), ua });
+      refreshTop();
+    } catch (e) {
+      console.warn("[rank] submit error:", e);
+    }
   }
   function gameOver() {
     state = "gameover";
     aud.playBgm("gameover");
     if (config.audio?.sfx?.explode) aud.playSfx(config.audio.sfx.explode);
+
+    // ベスト更新時のみ送信（>0）
+    if (score > 0 && Math.floor(score) > Math.floor(bestScore)) {
+      bestScore = Math.floor(score);
+      localStorage.setItem("bestScore", String(bestScore));
+      maybeSubmitBest(bestScore);
+    }
   }
 
   function applyZoneLogic(dt) {
     const inSafe  = safeZones.playerInside(player.x, player.y, player.hitR);
-    const inBonus = !inSafe && bonusZone.playerInside(player.x, player.y); // セーフ優先
+    const inBonus = !inSafe && bonusZone.playerInside(player.x, player.y);
     let nextState = inSafe ? "safe" : (inBonus ? "bonus" : "playing");
-
     if (state !== nextState) {
       if (nextState === "safe")   { aud.playBgm("safe");   if (config.audio?.sfx?.zone_safe)   aud.playSfx(config.audio.sfx.zone_safe); }
       if (nextState === "bonus")  { aud.playBgm("bonus");  if (config.audio?.sfx?.zone_bonus)  aud.playSfx(config.audio.sfx.zone_bonus); }
       if (nextState === "playing"){ aud.playBgm("normal"); if (config.audio?.sfx?.zone_normal) aud.playSfx(config.audio.sfx.zone_normal); }
       state = nextState;
     }
-
     if (state === "bonus") {
       score += (config.score?.bonusPerSec ?? 1000) * dt;
     } else if (state === "safe") {
@@ -174,29 +232,17 @@ export async function boot(conf, V = "") {
     } else {
       score += (config.score?.perSec ?? 100) * dt;
     }
-
-    for (let i = bullets.length - 1; i >= 0; i--) {
-      const b = bullets[i];
-      if (safeZones.bulletHitsSafe(b.x, b.y, b.r)) bullets.splice(i, 1);
-    }
   }
 
   function updateBullets(dt) {
     spawner.update(dt, gameTime, bullets, player);
-
     const px = player.x, py = player.y, ph = player.hitR;
     for (let i = bullets.length - 1; i >= 0; i--) {
       const b = bullets[i];
       b.update(dt, player);
-
       const dx = b.x - px, dy = b.y - py;
-      if (dx * dx + dy * dy < (b.hitR + ph) * (b.hitR + ph)) {
-        gameOver();
-        return;
-      }
-      if (b.x < -40 || b.x > W + 40 || b.y < -40 || b.y > H + 40) {
-        bullets.splice(i, 1);
-      }
+      if (dx * dx + dy * dy < (b.hitR + ph) * (b.hitR + ph)) { gameOver(); return; }
+      if (b.x < -40 || b.x > W + 40 || b.y < -40 || b.y > H + 40) { bullets.splice(i, 1); }
     }
   }
 
@@ -215,35 +261,33 @@ export async function boot(conf, V = "") {
 
     g.fillStyle = "#000"; g.fillRect(0, 0, W, H);
     if (bgImg) drawBG(dt);
-    safeZones.draw(g);
-    bonusZone.draw(g);
+    safeZones.draw(g); bonusZone.draw(g);
     for (const b of bullets) b.draw(g);
     player.draw(g);
     drawUI();
-
     requestAnimationFrame(loop);
   }
 
-  // ---- 起動シーケンス ----
+  // ==== 起動 ====
   aud = new AudioManager(config);
-
-  try { bgImg = await loadImage(config.background.image); }
-  catch (e) { console.warn("bg load failed:", e); }
+  try { bgImg = await loadImage(config.background.image); } catch (e) { console.warn("bg load failed:", e); }
 
   player = new Player(config);
   player.load().catch(e => console.warn("[player] load error (fallback active)", e));
 
-  await loadBulletSprites(); // 画像パス自体は変更なし（画像を更新したい時はファイル名を変えるのが確実）
-  spawner = new Spawner(config);
+  await loadBulletSprites();
+  spawner   = new Spawner(config);
+  safeZones = new SafeZones(config);  await safeZones.load(config.ui?.sprites?.safe || "assets/img/zone_safe.png");
+  bonusZone = new BonusZone(config);  await bonusZone.load(config.ui?.sprites?.bonus || "assets/img/zone_bonus.png");
 
-  // ゾーン
-  safeZones = new zonesMod.SafeZones(config);
-  await safeZones.load(config.ui?.sprites?.safe || "assets/img/zone_safe.png");
-  bonusZone = new zonesMod.BonusZone(config);
-  await bonusZone.load(config.ui?.sprites?.bonus || "assets/img/zone_bonus.png");
+  if (rankClient.enabled) refreshTop();
 
-  setupInput();
+  // 入力
+  input = new Input(canvas);
+  canvas.addEventListener("pointerdown", async () => { if (!unlocked) { await aud.unlock(); unlocked = true; } }, { passive: true });
+  addEventListener("keydown", (e) => { if (e.key === "Enter" && state === "title") startGame(); if (e.key === "F2") showDebug = !showDebug; });
+
+  // ループ開始
   requestAnimationFrame(loop);
-
-  console.log(`[boot] ok V=${V}`);
+  console.log(`[boot] ok V=${V} rank=${rankClient.enabled ? "on" : "off"}`);
 }
