@@ -108,7 +108,9 @@ export async function boot(conf) {
 
   // 背景と自機スプライト
   try { bgImg = await loadImage(config.background.image); } catch { console.warn("bg load failed"); }
-  player = new Player(config); await player.load();
+  player = new Player(config);
+player.load().catch(e => console.warn("[player] load error (fallback active)", e)); // ← awaitしない
+
 
   setupInput();
   requestAnimationFrame(loop);
