@@ -19,6 +19,9 @@
   <div id="err"><pre id="errtxt"></pre></div>
 
   <script type="module">
+    // ▼ この文字を変えるだけで、main.js も中の全モジュールも確実に更新されます
+    const V = "zl5";
+
     const showErr = (e) => {
       const box = document.getElementById('err');
       const pre = document.getElementById('errtxt');
@@ -26,22 +29,21 @@
       box.style.display = 'flex';
       console.error(e);
     };
-
-    // どんな例外も画面に表示
     window.addEventListener('error',   ev => showErr(ev.error || ev.message));
     window.addEventListener('unhandledrejection', ev => showErr(ev.reason || ev));
 
+    const withV = (src) => src + (src.includes("?") ? "&" : "?") + "v=" + V;
+
     (async () => {
       try {
-        // 常に最新を取得
-        const res = await fetch("./config/game.json?v=" + Date.now(), { cache: "no-store" });
+        const res = await fetch(withV("./config/game.json"), { cache: "no-store" });
         if (!res.ok) throw new Error("config fetch failed: " + res.status + " " + res.statusText);
         const conf = await res.json();
         await document.fonts.ready;
 
-        // main.js もキャッシュ回避で import
-        const mod = await import("./js/main.js?v=rescue4");
-        mod.boot(conf);
+        const mod = await import(withV("./js/main.js"));
+        // V を渡すことで、main.js 側もサブモジュールに同じ V を適用できます
+        mod.boot(conf, V);
       } catch (e) {
         showErr(e);
       }
