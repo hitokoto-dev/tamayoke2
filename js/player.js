@@ -52,27 +52,29 @@ export class Player {
     this.y = Math.max(r, Math.min(540 - r, this.y));
   }
 
-  draw(g) {
-    const r = this.size / 2;
+draw(g) {
+  const r = this.size / 2;
 
-    // 下地の発光（絶対に見えるように）
+  // スプライト未読込のときだけプレースホルダの発光を出す
+  const showGlow = (!this.sprite) || (this.cfg.glow === true);
+  if (showGlow) {
     g.save();
     g.globalAlpha = 0.6;
     g.fillStyle = "#0ff";
     g.beginPath(); g.arc(this.x, this.y, r + 6, 0, Math.PI * 2); g.fill();
     g.restore();
-
-    if (this.sprite) {
-      g.drawImage(this.sprite, this.x - r, this.y - r, this.size, this.size);
-    } else {
-      // プレースホルダ（明るいシアン）
-      g.fillStyle = "#0ff";
-      g.beginPath(); g.arc(this.x, this.y, r, 0, Math.PI * 2); g.fill();
-    }
-
-    // 視認性のための白枠
-    g.strokeStyle = "rgba(255,255,255,0.9)";
-    g.lineWidth = 1.5;
-    g.beginPath(); g.arc(this.x, this.y, r, 0, Math.PI * 2); g.stroke();
   }
+
+  if (this.sprite) {
+    g.drawImage(this.sprite, this.x - r, this.y - r, this.size, this.size);
+  } else {
+    // フォールバック（発光＋円）
+    g.fillStyle = "#0ff";
+    g.beginPath(); g.arc(this.x, this.y, r, 0, Math.PI * 2); g.fill();
+  }
+
+  // 細い白枠（視認性）
+  g.strokeStyle = "rgba(255,255,255,0.9)";
+  g.lineWidth = 1.5;
+  g.beginPath(); g.arc(this.x, this.y, r, 0, Math.PI * 2); g.stroke();
 }
