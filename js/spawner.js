@@ -1,11 +1,16 @@
-// spawner.js — パターン発生＆難易度スケール（GRACE中もタイマー進行）
-import { Bullet, BULLET_TYPES } from "./bullets.js?v=danmaku2";
+// spawner.js — パターン発生＆難易度スケール（tuning対応）
+import { Bullet, BULLET_TYPES } from "./bullets.js?v=danmaku4";
 
 export class Spawner {
   constructor(config) {
     this.cfg = config;
     this.t = 0;
     this.timers = { rain: 0, side: 0, fan: 0, ring: 0, homing: 0 };
+
+    // 追加：調整用スケール
+    const t = this.cfg.tuning || {};
+    this.speedScale = (typeof t.bulletSpeedScale === "number") ? t.bulletSpeedScale : 1.0;
+    this.countScale = (typeof t.bulletCountScale === "number") ? t.bulletCountScale : 1.0;
   }
 
   reset() {
@@ -13,48 +18,56 @@ export class Spawner {
     this.timers.rain = this.timers.side = this.timers.fan = this.timers.ring = this.timers.homing = 0;
   }
 
-  // 難易度係数（仕様に基づく）
   _coeff(time) {
     const base = this.cfg.difficulty.base;       // 0.6
     const gain = this.cfg.difficulty.gainPerSec; // 0.08
+    const caps = this.cfg.difficulty.caps;       // {speedMul, countMul}
+
     const d = base + Math.max(0, time - this.cfg.graceSec) * gain;
-    const speedMul = Math.min(this.cfg.difficulty.caps.speedMul, 1 + (d - base));
-    const countMul = Math.min(this.cfg.difficulty.caps.countMul, 1 + 0.6 * (d - base));
+
+    // ベースの倍率
+    const baseSpeedMul = Math.min(caps.speedMul, 1 + (d - base));
+    const baseCountMul = Math.min(caps.countMul, 1 + 0.6 * (d - base));
+
+    // スケールを適用（上限もスケールに合わせて拡張）
+    const speedMul = Math.min(baseSpeedMul * this.speedScale, caps.speedMul * this.speedScale);
+    const countMul = Math.min(baseCountMul * this.countScale, caps.countMul * this.countScale);
+
     return { d, speedMul, countMul };
   }
 
   update(dt, time, bullets, player) {
     this.t += dt;
 
-    // ★ GRACE中もタイマーだけ進める（3秒経過時点で一気に発生できる）
+    // GRACE中もタイマー進行（経過直後に即発生）
     this.timers.rain   += dt;
     this.timers.side   += dt;
     this.timers.fan    += dt;
     this.timers.ring   += dt;
     this.timers.homing += dt;
 
-    if (time < this.cfg.graceSec) return; // まだ発射しない
+    if (time < this.cfg.graceSec) return;
 
     const { speedMul, countMul } = this._coeff(time);
     const W = this.cfg.logicSize.w, H = this.cfg.logicSize.h;
     const hitR = this.cfg.bullets.hitR;
     const ev = this.cfg.spawns;
 
-    // 小雨（上から点在）
+    // --- 小雨（上から点在）
     while (this.timers.rain >= ev.rainEvery) {
       this.timers.rain -= ev.rainEvery;
       const n = Math.max(1, Math.round(4 * countMul));
       for (let i = 0; i < n; i++) {
         const x = 40 + Math.random() * (W - 80);
         const y = -20 - Math.random() * 60;
-        const spd = 160 * speedMul;
+        const spd = 160 * speedMul; // ← 全体が遅くなる
         bullets.push(new Bullet({
           type: BULLET_TYPES.NORMAL, x, y, vx: 0, vy: spd, r: 9, hitR
         }));
       }
     }
 
-    // 横から直線（左右ランダム）
+    // --- 横から直線（左右ランダム）
     while (this.timers.side >= ev.sideEvery) {
       this.timers.side -= ev.sideEvery;
       const fromLeft = Math.random() < 0.5;
@@ -70,12 +83,12 @@ export class Spawner {
       }
     }
 
-    // 横から扇
+    // --- 横から扇
     while (this.timers.fan >= ev.fanEvery) {
       this.timers.fan -= ev.fanEvery;
       const fromLeft = Math.random() < 0.5;
       const baseY = H * (0.25 + 0.5 * Math.random());
-      const n = 7;
+      const n = Math.max(5, Math.round(7 * countMul)); // 少し密度を上げる
       for (let i = 0; i < n; i++) {
         const t = (i / (n - 1)) - 0.5; // -0.5..0.5
         const ang = (fromLeft ? 0 : Math.PI) + t * (Math.PI / 4);
@@ -89,7 +102,7 @@ export class Spawner {
       }
     }
 
-    // 誘導弾（仕様：速度120・最大旋回15°/s・5秒ごと1発）
+    // --- 誘導弾（5秒ごと/速度120ベース）
     while (this.timers.homing >= ev.kanjiEvery) {
       this.timers.homing -= ev.kanjiEvery;
       const x = Math.random() < 0.5 ? 80 : (W - 80);
@@ -104,7 +117,5 @@ export class Spawner {
         type: BULLET_TYPES.HOMING, x, y, vx, vy, r: 8, hitR
       }));
     }
-
-    // （リング等は後で追加）
   }
 }
