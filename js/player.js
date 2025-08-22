@@ -1,16 +1,16 @@
-// player.js — 安全版：読み込み失敗でも必ず見える発光サークルを描画
+// player.js — スプライトあり=光輪OFF / なければ発光プレースホルダ
 export class Player {
   constructor(config) {
     this.cfg = config.player;
     this.x = 960 * 0.5;
     this.y = 540 * 0.85;
     this.vx = 0; this.vy = 0;
-    this.speed = this.cfg.speed; // 例: 280
-    this.slow  = this.cfg.slow;  // 例: 120
-    this.size  = this.cfg.size;  // 見た目サイズ（px）
-    this.hitR  = this.cfg.hitR;  // 当たり判定半径（px）
+    this.speed = this.cfg.speed;
+    this.slow  = this.cfg.slow;
+    this.size  = this.cfg.size;
+    this.hitR  = this.cfg.hitR;
     this.sprite = null;
-    this.spritePath = this.cfg.sprite; // "assets/img/player.png"
+    this.spritePath = this.cfg.sprite;
   }
 
   async load() {
@@ -21,15 +21,16 @@ export class Player {
         im.onerror = rej;
         im.src = this.spritePath;
       });
-      console.log("[player] sprite loaded:", this.spritePath, this.sprite.naturalWidth, this.sprite.naturalHeight);
+      console.log("[player] sprite loaded:", this.spritePath);
     } catch (e) {
-      console.warn("[player] sprite failed, fallback to circle:", this.spritePath, e);
-      this.sprite = null; // フォールバック描画へ
+      console.warn("[player] sprite failed (fallback to circle):", this.spritePath, e);
+      this.sprite = null;
     }
   }
 
-  update(dt, input, activeTouches = 0) {
-    const speed = (input.isSlow(activeTouches) ? this.slow : this.speed);
+  update(dt, input) {
+    const useSlow = input.isSlow(0);
+    const speed = useSlow ? this.slow : this.speed;
 
     if (input.ptrDown) {
       const k = 12;
@@ -46,35 +47,33 @@ export class Player {
       this.y += ax.y * speed * dt;
     }
 
-    // 画面内にクリップ
     const r = this.size / 2;
     this.x = Math.max(r, Math.min(960 - r, this.x));
     this.y = Math.max(r, Math.min(540 - r, this.y));
   }
 
-draw(g) {
-  const r = this.size / 2;
+  draw(g) {
+    const r = this.size / 2;
 
-  // スプライト未読込のときだけプレースホルダの発光を出す
-  const showGlow = (!this.sprite) || (this.cfg.glow === true);
-  if (showGlow) {
-    g.save();
-    g.globalAlpha = 0.6;
-    g.fillStyle = "#0ff";
-    g.beginPath(); g.arc(this.x, this.y, r + 6, 0, Math.PI * 2); g.fill();
-    g.restore();
+    // スプライト未読込 もしくは config.glow === true のときだけ光らせる
+    const showGlow = (!this.sprite) || (this.cfg.glow === true);
+    if (showGlow) {
+      g.save();
+      g.globalAlpha = 0.6;
+      g.fillStyle = "#0ff";
+      g.beginPath(); g.arc(this.x, this.y, r + 6, 0, Math.PI * 2); g.fill();
+      g.restore();
+    }
+
+    if (this.sprite) {
+      g.drawImage(this.sprite, this.x - r, this.y - r, this.size, this.size);
+    } else {
+      g.fillStyle = "#0ff";
+      g.beginPath(); g.arc(this.x, this.y, r, 0, Math.PI * 2); g.fill();
+    }
+
+    g.strokeStyle = "rgba(255,255,255,0.9)";
+    g.lineWidth = 1.5;
+    g.beginPath(); g.arc(this.x, this.y, r, 0, Math.PI * 2); g.stroke();
   }
-
-  if (this.sprite) {
-    g.drawImage(this.sprite, this.x - r, this.y - r, this.size, this.size);
-  } else {
-    // フォールバック（発光＋円）
-    g.fillStyle = "#0ff";
-    g.beginPath(); g.arc(this.x, this.y, r, 0, Math.PI * 2); g.fill();
-  }
-
-  // 細い白枠（視認性）
-  g.strokeStyle = "rgba(255,255,255,0.9)";
-  g.lineWidth = 1.5;
-  g.beginPath(); g.arc(this.x, this.y, r, 0, Math.PI * 2); g.stroke();
 }
