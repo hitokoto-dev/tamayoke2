@@ -1,15 +1,19 @@
-// main.js — 背景 + 自機 + 弾幕 + 当たり判定（F2でデバッグ表示）
-import { AudioManager }   from "./audioManager.js?v=danmaku4";
-import { Input }          from "./input.js?v=danmaku4";
-import { Player }         from "./player.js?v=danmaku4";
-import { loadBulletSprites } from "./bullets.js?v=danmaku4";
-import { Spawner }        from "./spawner.js?v=danmaku4";
+// main.js — 背景 + 自機 + 弾幕 + 当たり判定 + セーフ/ボーナスゾーン
+// F2でデバッグ表示。ゾーン入退でBGMクロスフェード＆SFX。
+import { AudioManager }   from "./audioManager.js?v=zones1";
+import { Input }          from "./input.js?v=zones1";
+import { Player }         from "./player.js?v=zones1";
+import { loadBulletSprites } from "./bullets.js?v=zones1";
+import { Spawner }        from "./spawner.js?v=zones1";
+import { SafeZones, BonusZone } from "./zones.js?v=zones1";
 
 const STARTS_ON_FIRST_TAP = true;
 const W = 960, H = 540;
 
 let canvas, g, config, aud, input, player, spawner;
-let state = "title";
+let safeZones, bonusZone;
+
+let state = "title"; // "title" | "playing" | "safe" | "bonus" | "gameover"
 let last = 0;
 let gameTime = 0;
 let score = 0;
@@ -41,11 +45,20 @@ function drawBG(dt) {
 }
 
 function drawUI() {
+  const fontCfg = config.ui.font;
+  const colors = {
+    playing: fontCfg.normalColor,
+    safe:    fontCfg.penaltyColor,
+    bonus:   fontCfg.bonusColor,
+    gameover:"#ffffff",
+    title:   fontCfg.normalColor
+  };
   g.font = "700 28px Orbitron, system-ui";
-  g.fillStyle = "#66aaff";
-  g.shadowColor = "#001a33"; g.shadowBlur = 4; g.shadowOffsetX = 2; g.shadowOffsetY = 2;
-  const elapsed = isPlaying() ? gameTime : 0;
+  g.fillStyle = colors[state] || fontCfg.normalColor;
+  g.shadowColor = fontCfg.shadow.color; g.shadowBlur = fontCfg.shadow.blur;
+  g.shadowOffsetX = fontCfg.shadow.offsetX; g.shadowOffsetY = fontCfg.shadow.offsetY;
 
+  const elapsed = isPlaying() ? gameTime : 0;
   g.textAlign = "right";
   g.fillText(`SCORE ${String(Math.floor(score)).padStart(6, "0")}`, W - 12, 12 + 28);
   g.textAlign = "left";
@@ -123,20 +136,54 @@ function gameOver() {
   if (config.audio?.sfx?.explode) aud.playSfx(config.audio.sfx.explode);
 }
 
+function applyZoneLogic(dt) {
+  // ゾーン判定
+  const inSafe  = safeZones.playerInside(player.x, player.y, player.hitR);
+  const inBonus = !inSafe && bonusZone.playerInside(player.x, player.y); // セーフ優先
+
+  let nextState = inSafe ? "safe" : (inBonus ? "bonus" : "playing");
+  if (state !== nextState) {
+    // BGMクロスフェード
+    if (nextState === "safe")   { aud.playBgm("safe");   if (config.audio?.sfx?.zone_safe)   aud.playSfx(config.audio.sfx.zone_safe); }
+    if (nextState === "bonus")  { aud.playBgm("bonus");  if (config.audio?.sfx?.zone_bonus)  aud.playSfx(config.audio.sfx.zone_bonus); }
+    if (nextState === "playing"){ aud.playBgm("normal"); if (config.audio?.sfx?.zone_normal) aud.playSfx(config.audio.sfx.zone_normal); }
+    state = nextState;
+  }
+
+  // スコア処理
+  if (state === "bonus") {
+    score += (config.score?.bonusPerSec ?? 1000) * dt;
+  } else if (state === "safe") {
+    score -= (config.score?.penaltyPerSec ?? 1000) * dt;
+    if (score <= 0) { score = 0; gameOver(); }
+  } else {
+    score += (config.score?.perSec ?? 100) * dt;
+  }
+
+  // セーフには弾は侵入不可：入った弾は消す
+  for (let i = bullets.length - 1; i >= 0; i--) {
+    const b = bullets[i];
+    if (safeZones.bulletHitsSafe(b.x, b.y, b.r)) bullets.splice(i, 1);
+  }
+}
+
 function updateBullets(dt) {
   spawner.update(dt, gameTime, bullets, player);
 
+  // 弾移動＆当たり
   const px = player.x, py = player.y, ph = player.hitR;
   for (let i = bullets.length - 1; i >= 0; i--) {
     const b = bullets[i];
     b.update(dt, player);
 
+    // 自機との衝突
     const dx = b.x - px, dy = b.y - py;
     if (dx * dx + dy * dy < (b.hitR + ph) * (b.hitR + ph)) {
       gameOver();
       return;
     }
 
+    // 画面外で破棄
     if (b.x < -40 || b.x > W + 40 || b.y < -40 || b.y > H + 40) {
       bullets.splice(i, 1);
     }
@@ -150,13 +197,19 @@ function loop(ts) {
 
   if (isPlaying()) {
     gameTime += dt;
-    score += (config.score?.perSec ?? 100) * dt;
+    bonusZone.update(dt);
     updateBullets(dt);
     player.update(dt, input);
+    applyZoneLogic(dt);
   }
 
+  // 描画
   g.fillStyle = "#000"; g.fillRect(0, 0, W, H);
   if (bgImg) drawBG(dt);
+
+  // 背景 → ゾーン → 弾 → 自機 → UI
+  safeZones.draw(g);
+  bonusZone.draw(g);
   for (const b of bullets) b.draw(g);
   player.draw(g);
   drawUI();
@@ -178,10 +231,15 @@ export async function boot(conf) {
   player.load().catch(e => console.warn("[player] load error (fallback active)", e));
 
   await loadBulletSprites();
-  Spawner.prototype.__fileVersion = "danmaku4";
   spawner = new Spawner(config);
+
+  // ゾーン
+  safeZones = new SafeZones(config);
+  await safeZones.load(config.ui?.sprites?.safe || "assets/img/zone_safe.png");
+  bonusZone = new BonusZone(config);
+  await bonusZone.load(config.ui?.sprites?.bonus || "assets/img/zone_bonus.png");
 
   setupInput();
   requestAnimationFrame(loop);
-  console.log("[boot] danmaku4 ready");
+  console.log("[boot] zones1 ready");
 }
