@@ -1,10 +1,9 @@
-// main.js — 背景 + 自機 + 弾幕 + 当たり判定（GRACE修正）
-// ※ 内部importに v=danmaku2 を付けてキャッシュを確実に無効化
-import { AudioManager }   from "./audioManager.js?v=danmaku2";
-import { Input }          from "./input.js?v=danmaku2";
-import { Player }         from "./player.js?v=danmaku2";
-import { loadBulletSprites } from "./bullets.js?v=danmaku2";
-import { Spawner }        from "./spawner.js?v=danmaku2";
+// main.js — 背景 + 自機 + 弾幕 + 当たり判定（F2でデバッグ表示）
+import { AudioManager }   from "./audioManager.js?v=danmaku4";
+import { Input }          from "./input.js?v=danmaku4";
+import { Player }         from "./player.js?v=danmaku4";
+import { loadBulletSprites } from "./bullets.js?v=danmaku4";
+import { Spawner }        from "./spawner.js?v=danmaku4";
 
 const STARTS_ON_FIRST_TAP = true;
 const W = 960, H = 540;
@@ -58,7 +57,7 @@ function drawUI() {
     g.textAlign = "center";
     g.fillText("Tap to Start", W/2, H/2);
     g.font = "400 16px Noto Sans JP, system-ui";
-    g.fillText("ドラッグ／WASD／矢印で移動。Shift/Spaceで低速。", W/2, H/2 + 30);
+    g.fillText("ドラッグ／WASD／矢印で移動。Shift/Spaceで低速。F2でデバッグ表示", W/2, H/2 + 30);
   }
 
   if (state === "gameover") {
@@ -75,10 +74,10 @@ function drawUI() {
   if (showDebug) {
     g.save();
     g.shadowBlur = 0;
-    g.fillStyle = "rgba(255,255,255,0.8)";
+    g.fillStyle = "rgba(255,255,255,0.85)";
     g.font = "400 12px system-ui";
     g.textAlign = "left";
-    g.fillText(`state=${state} bullets=${bullets.length.toString()}`, 12, H - 12);
+    g.fillText(`state=${state} bullets=${bullets.length}`, 12, H - 12);
     g.restore();
   }
 }
@@ -97,7 +96,7 @@ function setupInput() {
   addEventListener("keydown", (e) => {
     if (e.key === "Enter" && state === "title") startGame();
     if (e.key === "Escape" && state === "gameover") toTitle();
-    if (e.key.toLowerCase() === "d") showDebug = !showDebug; // デバッグ表示切替
+    if (e.key === "F2") showDebug = !showDebug;
     if (e.key === "s" && isPlaying()) { state = "safe";  aud.playBgm("safe"); }
     if (e.key === "b" && isPlaying()) { state = "bonus"; aud.playBgm("bonus"); }
     if (e.key === "g" && isPlaying()) { gameOver(); }
@@ -127,21 +126,17 @@ function gameOver() {
 function updateBullets(dt) {
   spawner.update(dt, gameTime, bullets, player);
 
-  // 移動＆当たり判定
   const px = player.x, py = player.y, ph = player.hitR;
   for (let i = bullets.length - 1; i >= 0; i--) {
     const b = bullets[i];
-    // update内で誘導の向きが決まる
     b.update(dt, player);
 
-    // 衝突
     const dx = b.x - px, dy = b.y - py;
     if (dx * dx + dy * dy < (b.hitR + ph) * (b.hitR + ph)) {
       gameOver();
       return;
     }
 
-    // 画面外で破棄
     if (b.x < -40 || b.x > W + 40 || b.y < -40 || b.y > H + 40) {
       bullets.splice(i, 1);
     }
@@ -160,10 +155,9 @@ function loop(ts) {
     player.update(dt, input);
   }
 
-  // 描画
   g.fillStyle = "#000"; g.fillRect(0, 0, W, H);
   if (bgImg) drawBG(dt);
-  for (const b of bullets) b['draw'](g);
+  for (const b of bullets) b.draw(g);
   player.draw(g);
   drawUI();
 
@@ -184,9 +178,10 @@ export async function boot(conf) {
   player.load().catch(e => console.warn("[player] load error (fallback active)", e));
 
   await loadBulletSprites();
+  Spawner.prototype.__fileVersion = "danmaku4";
   spawner = new Spawner(config);
 
   setupInput();
   requestAnimationFrame(loop);
-  console.log("[boot] danmaku2 ready");
+  console.log("[boot] danmaku4 ready");
 }
