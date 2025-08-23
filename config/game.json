@@ -5,7 +5,7 @@
   "player": {
     "speed": 280,
     "slow": 120,
-    "size": 56,
+    "size": 168,
     "hitR": 4,
     "sprite": "assets/img/player.png",
     "glow": false,

@@ -58,11 +58,22 @@ export async function boot(conf, V = "") {
   function drawBG(dt) {
     const speed = config.background.scrollSpeed;
     const loopH = config.background.height;
-    bgY = (bgY + speed * dt) % loopH;
+    bgY = (bgY - speed * dt + loopH) % loopH;
     const half = loopH / 2;
     const y1 = Math.floor(-bgY / 2);
     g.drawImage(bgImg, 0, 0, bgImg.width, half, 0, y1, W, H);
     g.drawImage(bgImg, 0, half, bgImg.width, half, 0, y1 + H, W, H);
+  }
+
+  function drawScoreStable(g, xRight, y, label, numText) {
+    g.save();
+    g.textAlign = "left";
+    const digitW = g.measureText("0").width;
+    const labelW = g.measureText(label).width;
+    let x = xRight - (labelW + digitW * numText.length);
+    g.fillText(label, x, y); x += labelW;
+    for (const ch of numText) { g.fillText(ch, x, y); x += digitW; }
+    g.restore();
   }
 
   function drawUI() {
@@ -83,9 +94,8 @@ export async function boot(conf, V = "") {
 
     const elapsed = isPlaying() ? gameTime : 0;
 
-    // 右上スコア
-    g.textAlign = "right";
-    g.fillText(`SCORE ${String(Math.floor(score)).padStart(6, "0")}`, W - 12, 12 + 28);
+    // 右上スコア（右端固定・等幅）
+    drawScoreStable(g, W - 12, 12 + 28, "SCORE ", String(Math.floor(score)).padStart(6, "0"));
 
     // 左上 BEST/TIME（TIMEはタイトル/ゲーム時で使い分け）
     g.textAlign = "left";
@@ -236,10 +246,12 @@ export async function boot(conf, V = "") {
 
   function updateBullets(dt) {
     spawner.update(dt, gameTime, bullets, player);
+    const speedScale = (config.tuning && config.tuning.bulletSpeedScale) ?? 1;
+    const bdt = dt * speedScale;
     const px = player.x, py = player.y, ph = player.hitR;
     for (let i = bullets.length - 1; i >= 0; i--) {
       const b = bullets[i];
-      b.update(dt, player);
+      b.update(bdt, player);
       const dx = b.x - px, dy = b.y - py;
       if (dx * dx + dy * dy < (b.hitR + ph) * (b.hitR + ph)) { gameOver(); return; }
       if (b.x < -40 || b.x > W + 40 || b.y < -40 || b.y > H + 40) { bullets.splice(i, 1); }
