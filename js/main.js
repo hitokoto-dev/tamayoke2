@@ -1,4 +1,4 @@
-// js/main.js
+// js/main.js (self-healing DOM版 / まるっと差し替え)
 // tamayoke2 main loop / state / UI / audio unlock+crossfade / rank submit
 // 16:9 logical 960x540, CSS scale (aspect preserved)
 
@@ -22,14 +22,13 @@ import {
 } from "./rank.js";
 
 // ----------------------------------------
-// Constants
+// Constants & global flags
 // ----------------------------------------
 const W = 960, H = 540; // logical size
 const TITLE = "title";
 const PLAY  = "play";
 const OVER  = "over";
 
-// debug flag via query
 const url = new URL(location.href);
 const DEBUG = url.searchParams.has("debug");
 
@@ -37,27 +36,70 @@ const DEBUG = url.searchParams.has("debug");
 const BUILD_V = (globalThis.V ?? "dev");
 
 // ----------------------------------------
-// DOM / Canvas
+// DOM / Canvas（自己修復: DOMを待ち、無ければ生成）
 // ----------------------------------------
-const canvas = document.getElementById("g");
-if (!canvas) throw new Error("#g canvas not found");
-canvas.width = W;
-canvas.height = H;
-const ctx = canvas.getContext("2d");
+let canvas = null;
+let ctx = null;
+let elLeaderboard = null;
 
-// Leaderboard DOM（右側枠）— index.html 側で <pre id="ui-leaderboard"></pre> を用意想定
-const elLeaderboard = document.getElementById("ui-leaderboard");
+function ensureLeaderboardStyle(el) {
+  // index.html 側にCSSが無い場合のための最低限スタイル
+  if (!el) return;
+  el.className = el.className || "leaderboard";
+  if (!el.style.position) {
+    Object.assign(el.style, {
+      position:"absolute", top:"12px", right:"12px", width:"240px", height:"220px",
+      padding:"8px", border:"1px solid #334", background:"rgba(0,0,0,.35)",
+      font:"14px Orbitron,monospace", whiteSpace:"pre", overflow:"auto", color:"#fff"
+    });
+  }
+}
 
 // CSS scale to fit window (aspect keep)
 function fitCanvas() {
+  if (!canvas) return;
   const vw = window.innerWidth;
   const vh = window.innerHeight;
   const scale = Math.min(vw / W, vh / H);
-  canvas.style.width = `${W * scale | 0}px`;
-  canvas.style.height = `${H * scale | 0}px`;
+  canvas.style.width = `${(W * scale) | 0}px`;
+  canvas.style.height = `${(H * scale) | 0}px`;
 }
-window.addEventListener("resize", fitCanvas);
-fitCanvas();
+
+// DOM ready helper
+async function domReady() {
+  if (document.readyState === "loading") {
+    await new Promise(res => document.addEventListener("DOMContentLoaded", res, { once: true }));
+  }
+}
+
+// DOM bootstrap（存在しなければ自動生成）
+async function ensureDom() {
+  await domReady();
+
+  // canvas
+  canvas = document.getElementById("g");
+  if (!canvas) {
+    canvas = document.createElement("canvas");
+    canvas.id = "g";
+    canvas.width = W;
+    canvas.height = H;
+    (document.getElementById("stage") || document.body).appendChild(canvas);
+  }
+  ctx = canvas.getContext("2d");
+
+  // leaderboard
+  elLeaderboard = document.getElementById("ui-leaderboard");
+  if (!elLeaderboard) {
+    elLeaderboard = document.createElement("pre");
+    elLeaderboard.id = "ui-leaderboard";
+    elLeaderboard.textContent = "未設定";
+    (document.getElementById("stage") || document.body).appendChild(elLeaderboard);
+  }
+  ensureLeaderboardStyle(elLeaderboard);
+
+  window.addEventListener("resize", fitCanvas);
+  fitCanvas();
+}
 
 // ----------------------------------------
 // Input (mouse/touch drag + keyboard WASD/arrow + Shift/Space=slow)
@@ -80,18 +122,20 @@ function canvasPos(e) {
   const y = (e.clientY - r.top)  * (H / r.height);
   return { x, y };
 }
-canvas.addEventListener("pointerdown", (e)=>{
-  pointerDown = true;
-  const p = canvasPos(e);
-  pointerX = p.x; pointerY = p.y;
-  unlockAudio(); // first gesture -> resume AudioContext
-});
-window.addEventListener("pointerup",   ()=> pointerDown = false);
-canvas.addEventListener("pointermove", (e)=>{
-  if (!pointerDown) return;
-  const p = canvasPos(e);
-  pointerX = p.x; pointerY = p.y;
-});
+function attachPointerHandlers() {
+  canvas.addEventListener("pointerdown", (e)=>{
+    pointerDown = true;
+    const p = canvasPos(e);
+    pointerX = p.x; pointerY = p.y;
+    unlockAudio(); // first gesture -> resume AudioContext
+  });
+  window.addEventListener("pointerup",   ()=> pointerDown = false);
+  canvas.addEventListener("pointermove", (e)=>{
+    if (!pointerDown) return;
+    const p = canvasPos(e);
+    pointerX = p.x; pointerY = p.y;
+  });
+}
 
 // ----------------------------------------
 // Config
@@ -157,7 +201,6 @@ function startLoopingSource(buffer, loopStart, loopEnd) {
   src.buffer = buffer;
   src.loop = true;
   if (loopEnd > loopStart) {
-    // precise loop points if provided
     src.loopStart = loopStart;
     src.loopEnd = loopEnd;
   }
@@ -171,9 +214,7 @@ function startLoopingSource(buffer, loopStart, loopEnd) {
 async function crossfadeTo(key) {
   if (!AC || AC.state !== "running") return;
   if (!bgm.tracks.has(key)) return;
-
-  // if already same key, nothing
-  if (bgm.current?.key === key) return;
+  if (bgm.current?.key === key) return; // same track
 
   const buf = await ensureTrackBuffer(key);
   if (!buf) return;
@@ -195,7 +236,6 @@ async function crossfadeTo(key) {
     c.gain.gain.cancelScheduledValues(now);
     c.gain.gain.setValueAtTime(c.gain.gain.value, now);
     c.gain.gain.linearRampToValueAtTime(0, now + dur);
-    // stop old after fade
     setTimeout(()=> {
       try { c.node.stop(); } catch {}
     }, bgm.crossfadeMs + 50);
@@ -237,7 +277,7 @@ let spawner = null;     // created from spawner.js (injected bullet classes)
 let state = TITLE;      // "title" | "play" | "over"
 let allowReturnAt = 0;  // ms timestamp after which we can return to title from OVER
 let score = 0;
-let timePlay = 0;       // seconds since game start (for difficulty ramp etc.)
+let timePlay = 0;       // seconds since game start
 let showDebug = DEBUG;  // F2 toggle
 
 // difficulty ramp helper (linear -> clamp to 1.0)
@@ -247,12 +287,9 @@ function difficultyMul(tSec, base = 0.2, grow = 0.8, timeToMax = 120) {
 }
 
 // ----------------------------------------
-// Spawner wiring
-// 注：spawner.js の実装差異に強めに耐えるよう、ゆるくアダプト
-// 期待： new Spawner({ Bullets, config }) もしくは createSpawner({ ... })
+// Spawner wiring（フォールバック内蔵）
 // ----------------------------------------
 function createSpawnerAdapter(cfg) {
-  // bullets injection
   const Bullets = { NormalBullet, FastBullet, HomingBullet, KanjiBullet };
   const S = SpawnerMod?.default || SpawnerMod?.Spawner || null;
 
@@ -262,14 +299,12 @@ function createSpawnerAdapter(cfg) {
   if (typeof SpawnerMod.createSpawner === "function") {
     return SpawnerMod.createSpawner({ Bullets, config: cfg });
   }
-  // フォールバック：最小実装（rain/side/ring/kanji/homing をざっくり）
+  // fallback: simple patterns
   let last = { rain: 0, side: 0, ring: 0, kanji: 0, homing: 0 };
   return {
     update(dt, nowSec) {
       const s = cfg.spawns || {};
       const bscale = cfg?.tuning?.bulletSpeedScale ?? 1.0;
-
-      // helpers
       function push(b) { if (b) bullets.push(b); }
 
       // rain
@@ -343,9 +378,6 @@ function createSpawnerAdapter(cfg) {
 
 // ----------------------------------------
 // Zones (safe bottom / bonus orbit center)
-// config.zones.safeH: 画面下からの高さ(px or ratio 0..1想定を自動判別)
-// config.zones.safeCols: 演出のみ（タイル線描画）
-// config.bonusMove: { r, speed, cx, cy } など（存在しなければ適当）
 // ----------------------------------------
 function valAsPx(v, total) {
   if (v == null) return 0;
@@ -361,8 +393,8 @@ function getZonesNow(tSec) {
   const cx = bm.cx ?? (W/2);
   const cy = bm.cy ?? (H*0.45);
   const R  = bm.r  ?? 70;
-  const sp = bm.speed ?? 0.6; // revolution per 10s-ish
-  const ang = tSec * sp; // radians/sec ざっくり
+  const sp = bm.speed ?? 0.6;
+  const ang = tSec * sp;
   const bx = cx + Math.cos(ang) * R;
   const by = cy + Math.sin(ang) * R;
   const br = bm.radius ?? 48;
@@ -382,9 +414,7 @@ function enterTitle() {
   state = TITLE;
   timePlay = 0;
   bullets.length = 0;
-  // BGM
   crossfadeTo("title").catch(()=>{});
-  // Leaderboard
   renderLeaderboard(rank, elLeaderboard).catch(()=>{});
 }
 
@@ -399,16 +429,15 @@ function startGame() {
 
 function enterGameOver() {
   state = OVER;
-  allowReturnAt = performance.now() + 700; // 0.7s 後にタイトルへ戻れる
+  allowReturnAt = performance.now() + 700; // 0.7s 後にタイトル復帰可
   bullets.length = 0; // 弾クリア
-  crossfadeTo("title").catch(()=>{}); // タイトルBGMへ戻す（好み）
+  crossfadeTo("title").catch(()=>{});
 }
 
 // ----------------------------------------
 // Drawing helpers
 // ----------------------------------------
 function drawBG(tSec) {
-  // simple gradient bg
   const g = ctx.createLinearGradient(0, 0, 0, H);
   g.addColorStop(0, "#0b1020");
   g.addColorStop(1, "#101a35");
@@ -452,7 +481,6 @@ function drawZones(tSec) {
 }
 
 function drawPlayer() {
-  // simple diamond player
   ctx.save();
   ctx.translate(player.x, player.y);
   ctx.fillStyle = "#4cf";
@@ -473,13 +501,10 @@ function drawPlayer() {
 }
 
 function drawBullets() {
-  for (const b of bullets) {
-    b.draw?.(ctx);
-  }
+  for (const b of bullets) b.draw?.(ctx);
 }
 
 function drawScore() {
-  // 等幅風：固定桁で右寄せ
   const s = String(score | 0).padStart(6, "0");
   ctx.font = "20px Orbitron, monospace";
   ctx.textAlign = "right";
@@ -558,26 +583,20 @@ function updatePlayer(dt) {
 }
 
 function updateBullets(dt, nowSec) {
-  // spawner
   spawner?.update?.(dt, nowSec);
 
-  // bullets update + cull
-  for (const b of bullets) {
-    b.update?.(dt, player);
-  }
+  for (const b of bullets) b.update?.(dt, player);
+
   bullets = bullets.filter(b => b.alive !== false &&
     b.x > -40 && b.x < W+40 && b.y > -40 && b.y < H+40);
 }
 
 function checkCollision() {
-  // circle-circle
   for (const b of bullets) {
     const br = (b.hitR ?? b.r ?? 6);
     const dx = b.x - player.x;
     const dy = b.y - player.y;
-    if (dx*dx + dy*dy <= (br + player.hitR) * (br + player.hitR)) {
-      return true;
-    }
+    if (dx*dx + dy*dy <= (br + player.hitR) * (br + player.hitR)) return true;
   }
   return false;
 }
@@ -598,7 +617,6 @@ async function submitIfBest(finalScore) {
   }
   const res = await rank.submit(name, finalScore|0);
   if (res.status === "ok") {
-    // refresh leaderboard
     renderLeaderboard(rank, elLeaderboard).catch(()=>{});
   } else {
     console.warn("rank submit failed:", res.error);
@@ -618,10 +636,9 @@ function loop(ts) {
 
   // input: global keys (state change)
   if (state === TITLE) {
-    // start: Enter / click
     if (keys.has("Enter") || pointerDown) {
       startGame();
-      pointerDown = false; // avoid immediate re-trigger
+      pointerDown = false;
     }
   } else if (state === PLAY) {
     timePlay += dt;
@@ -640,7 +657,6 @@ function loop(ts) {
       enterGameOver();
     }
   } else if (state === OVER) {
-    // wait then allow return
     if ((performance.now() >= allowReturnAt) && (keys.has("Enter") || pointerDown)) {
       pointerDown = false;
       enterTitle();
@@ -658,7 +674,7 @@ function loop(ts) {
     drawPlayer();
     drawScore();
   } else if (state === OVER) {
-    drawBullets(); // クリア済みだが一応
+    drawBullets();
     drawGameOver();
     drawScore();
   }
@@ -673,6 +689,9 @@ function loop(ts) {
 // ----------------------------------------
 (async function boot() {
   try {
+    await ensureDom();          // ★ DOM準備＆自己修復
+    attachPointerHandlers();    // ★ pointer handlers after canvas ready
+
     config = await loadConfig();
 
     // player tuning from config
@@ -689,15 +708,15 @@ function loop(ts) {
     // audio prepare
     makeAC();
     await prepareBgmFromConfig(config);
-    // 初期は AC は suspended の可能性 → ユーザー操作で unlockAudio()
+    // note: 実再生はユーザー操作で unlockAudio() → crossfadeTo()
 
-    // bullets images
+    // bullets images（ロード完了まで待つ）
     await loadBulletSprites();
 
     // spawner
     spawner = createSpawnerAdapter(config);
 
-    // UI: debug toggle
+    // debug toggle
     window.addEventListener("keydown", (e)=>{
       if (e.key === "F2") showDebug = !showDebug;
     });
@@ -707,8 +726,12 @@ function loop(ts) {
     requestAnimationFrame(loop);
   } catch (err) {
     console.error(err);
-    ctx.fillStyle = "#fff";
-    ctx.font = "16px monospace";
-    ctx.fillText("BOOT ERROR: " + err.message, 12, 20);
+    if (ctx) {
+      ctx.fillStyle = "#fff";
+      ctx.font = "16px monospace";
+      ctx.fillText("BOOT ERROR: " + err.message, 12, 20);
+    } else {
+      alert("BOOT ERROR: " + err.message);
+    }
   }
 })();
