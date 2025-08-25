@@ -1,315 +1,714 @@
-// main.js — ローダー方式 + ランキング（GAS）
-export async function boot(conf, V = "") {
-  const W = 960, H = 540;
-  const withV = (src) => V ? src + (src.includes("?") ? "&" : "?") + "v=" + V : src;
+// js/main.js
+// tamayoke2 main loop / state / UI / audio unlock+crossfade / rank submit
+// 16:9 logical 960x540, CSS scale (aspect preserved)
 
-  const [{ AudioManager }, { Input }, { Player }, bulletsMod, { Spawner }, zonesMod, { RankClient }] =
-    await Promise.all([
-      import(withV("./audioManager.js")),
-      import(withV("./input.js")),
-      import(withV("./player.js")),
-      import(withV("./bullets.js")),
-      import(withV("./spawner.js")),
-      import(withV("./zones.js")),
-      import(withV("./rank.js")),
-    ]);
+import {
+  NormalBullet,
+  FastBullet,
+  HomingBullet,
+  KanjiBullet,
+  loadBulletSprites
+} from "./bullets.js";
 
-  const { loadBulletSprites } = bulletsMod;
-  const { SafeZones, BonusZone } = zonesMod;
+import * as SpawnerMod from "./spawner.js";
 
-  // ====== 状態 ======
-  let canvas = document.getElementById("game");
-  let g = canvas.getContext("2d");
-  let config = conf;
-  let aud, input, player, spawner, safeZones, bonusZone;
+import {
+  Rank,
+  renderLeaderboard,
+  loadPlayerName,
+  savePlayerName,
+  loadBest,
+  saveBest
+} from "./rank.js";
 
-  let state = "title";  // "title" | "playing" | "safe" | "bonus" | "gameover"
-  let last = 0, gameTime = 0, score = 0, bgY = 0;
-  let bgImg = null, unlocked = false, bullets = [], showDebug = false;
+// ----------------------------------------
+// Constants
+// ----------------------------------------
+const W = 960, H = 540; // logical size
+const TITLE = "title";
+const PLAY  = "play";
+const OVER  = "over";
 
-  // ★ ゲームオーバー用（0.7 秒の再スタート遅延）
-  let restartAt = 0;
+// debug flag via query
+const url = new URL(location.href);
+const DEBUG = url.searchParams.has("debug");
 
-  // ローカル保存
-  let bestScore = Number(localStorage.getItem("bestScore") || 0);
-  let playerName = localStorage.getItem("playerName") || "";
+// V (cache-buster) from index.html if exposed; fallback
+const BUILD_V = (globalThis.V ?? "dev");
 
-  // ランキング
-  const rankUrl = config.rankApi?.endpoint || "";
-  const rankClient = new RankClient(rankUrl, V);
-  let topRows = [];
-  async function refreshTop() { topRows = rankClient.enabled ? (await rankClient.getTop()) : []; }
+// ----------------------------------------
+// DOM / Canvas
+// ----------------------------------------
+const canvas = document.getElementById("g");
+if (!canvas) throw new Error("#g canvas not found");
+canvas.width = W;
+canvas.height = H;
+const ctx = canvas.getContext("2d");
 
-  const isPlaying = () => state === "playing" || state === "safe" || state === "bonus";
+// Leaderboard DOM（右側枠）— index.html 側で <pre id="ui-leaderboard"></pre> を用意想定
+const elLeaderboard = document.getElementById("ui-leaderboard");
 
-  function fitCanvas() {
-    const s = Math.min(innerWidth / W, innerHeight / H);
-    canvas.style.width  = `${Math.floor(W * s)}px`;
-    canvas.style.height = `${Math.floor(H * s)}px`;
+// CSS scale to fit window (aspect keep)
+function fitCanvas() {
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
+  const scale = Math.min(vw / W, vh / H);
+  canvas.style.width = `${W * scale | 0}px`;
+  canvas.style.height = `${H * scale | 0}px`;
+}
+window.addEventListener("resize", fitCanvas);
+fitCanvas();
+
+// ----------------------------------------
+// Input (mouse/touch drag + keyboard WASD/arrow + Shift/Space=slow)
+// ----------------------------------------
+const keys = new Set();
+let pointerDown = false;
+let pointerX = W/2, pointerY = H*0.75;
+
+window.addEventListener("keydown", (e)=> {
+  if (e.repeat) return;
+  keys.add(e.key);
+  // prevent page scroll on arrows/space
+  if (["ArrowUp","ArrowDown","ArrowLeft","ArrowRight"," "].includes(e.key)) e.preventDefault();
+});
+window.addEventListener("keyup",   (e)=> { keys.delete(e.key); });
+
+function canvasPos(e) {
+  const r = canvas.getBoundingClientRect();
+  const x = (e.clientX - r.left) * (W / r.width);
+  const y = (e.clientY - r.top)  * (H / r.height);
+  return { x, y };
+}
+canvas.addEventListener("pointerdown", (e)=>{
+  pointerDown = true;
+  const p = canvasPos(e);
+  pointerX = p.x; pointerY = p.y;
+  unlockAudio(); // first gesture -> resume AudioContext
+});
+window.addEventListener("pointerup",   ()=> pointerDown = false);
+canvas.addEventListener("pointermove", (e)=>{
+  if (!pointerDown) return;
+  const p = canvasPos(e);
+  pointerX = p.x; pointerY = p.y;
+});
+
+// ----------------------------------------
+// Config
+// ----------------------------------------
+let config = null;
+async function loadConfig() {
+  const bust = DEBUG ? `?v=${Math.random()}` : `?v=${encodeURIComponent(BUILD_V)}`;
+  const r = await fetch(`./config/game.json${bust}`, { cache: "no-store" });
+  if (!r.ok) throw new Error(`config load failed: ${r.status}`);
+  const data = await r.json();
+  return data;
+}
+
+// ----------------------------------------
+// Audio (simple WebAudio crossfade player with loop points)
+// ----------------------------------------
+let AC = null;
+let masterGain = null;
+
+const bgm = {
+  current: null,  // {key, src, loopStart, loopEnd, gain, node, buf}
+  next: null,
+  tracks: new Map(), // key -> {src, loopStart, loopEnd, buf}
+  crossfadeMs: 400
+};
+
+function makeAC() {
+  AC = new (window.AudioContext || window.webkitAudioContext)();
+  masterGain = AC.createGain();
+  masterGain.gain.value = 1;
+  masterGain.connect(AC.destination);
+}
+
+async function decodeToBuffer(url) {
+  const res = await fetch(url, { cache: "force-cache" });
+  const ab = await res.arrayBuffer();
+  return await AC.decodeAudioData(ab);
+}
+
+async function prepareBgmFromConfig(cfg) {
+  if (!cfg?.audio?.bgm) return;
+  bgm.crossfadeMs = Math.max(0, cfg.audio.crossfadeMs ?? 400);
+  const entries = Object.entries(cfg.audio.bgm);
+  for (const [key, spec] of entries) {
+    const src = spec.src || spec.url || spec.file;
+    if (!src) continue;
+    const loopStart = Number(spec.loopStart ?? 0);
+    const loopEnd   = Number(spec.loopEnd ?? 0);
+    bgm.tracks.set(key, { src, loopStart, loopEnd, buf: null });
   }
-  addEventListener("resize", fitCanvas); fitCanvas();
+}
 
-  function loadImage(src) {
-    return new Promise((res, rej) => {
-      const im = new Image();
-      im.onload = () => res(im);
-      im.onerror = () => rej(new Error("image load failed: " + src));
-      im.src = withV(src);
-    });
+async function ensureTrackBuffer(key) {
+  const t = bgm.tracks.get(key);
+  if (!t) return null;
+  if (t.buf) return t.buf;
+  t.buf = await decodeToBuffer(t.src);
+  return t.buf;
+}
+
+function startLoopingSource(buffer, loopStart, loopEnd) {
+  const src = AC.createBufferSource();
+  src.buffer = buffer;
+  src.loop = true;
+  if (loopEnd > loopStart) {
+    // precise loop points if provided
+    src.loopStart = loopStart;
+    src.loopEnd = loopEnd;
+  }
+  const g = AC.createGain();
+  g.gain.value = 0;
+  src.connect(g).connect(masterGain);
+  src.start(0);
+  return { node: src, gain: g };
+}
+
+async function crossfadeTo(key) {
+  if (!AC || AC.state !== "running") return;
+  if (!bgm.tracks.has(key)) return;
+
+  // if already same key, nothing
+  if (bgm.current?.key === key) return;
+
+  const buf = await ensureTrackBuffer(key);
+  if (!buf) return;
+  const { loopStart=0, loopEnd=0 } = bgm.tracks.get(key);
+  const nxt = startLoopingSource(buf, loopStart, loopEnd);
+  bgm.next = { key, ...nxt };
+
+  const dur = Math.max(0.01, bgm.crossfadeMs / 1000);
+  const now = AC.currentTime;
+
+  // fade-in next
+  bgm.next.gain.gain.cancelScheduledValues(now);
+  bgm.next.gain.gain.setValueAtTime(0, now);
+  bgm.next.gain.gain.linearRampToValueAtTime(1, now + dur);
+
+  // fade-out current
+  if (bgm.current) {
+    const c = bgm.current;
+    c.gain.gain.cancelScheduledValues(now);
+    c.gain.gain.setValueAtTime(c.gain.gain.value, now);
+    c.gain.gain.linearRampToValueAtTime(0, now + dur);
+    // stop old after fade
+    setTimeout(()=> {
+      try { c.node.stop(); } catch {}
+    }, bgm.crossfadeMs + 50);
   }
 
-  function drawBG(dt) {
-    const speed = config.background.scrollSpeed;
-    const loopH = config.background.height;
-    bgY = (bgY - speed * dt + loopH) % loopH;
-    const half = loopH / 2;
-    const y1 = Math.floor(-bgY / 2);
-    g.drawImage(bgImg, 0, 0, bgImg.width, half, 0, y1, W, H);
-    g.drawImage(bgImg, 0, half, bgImg.width, half, 0, y1 + H, W, H);
+  // promote next to current
+  bgm.current = bgm.next;
+  bgm.next = null;
+}
+
+let audioUnlocked = false;
+async function unlockAudio() {
+  if (audioUnlocked) return;
+  if (!AC) makeAC();
+  try {
+    await AC.resume();
+    audioUnlocked = (AC.state === "running");
+  } catch {}
+}
+
+// ----------------------------------------
+// Rank (GAS)
+// ----------------------------------------
+let rank = null;
+
+// ----------------------------------------
+// Game objects
+// ----------------------------------------
+const player = {
+  x: W/2, y: H*0.8,
+  size: 24,
+  hitR: 10,
+  speed: 240,
+  slow: 0.5
+};
+
+let bullets = [];       // {update(dt), draw(ctx), alive, x,y,hitR?}
+let spawner = null;     // created from spawner.js (injected bullet classes)
+let state = TITLE;      // "title" | "play" | "over"
+let allowReturnAt = 0;  // ms timestamp after which we can return to title from OVER
+let score = 0;
+let timePlay = 0;       // seconds since game start (for difficulty ramp etc.)
+let showDebug = DEBUG;  // F2 toggle
+
+// difficulty ramp helper (linear -> clamp to 1.0)
+function difficultyMul(tSec, base = 0.2, grow = 0.8, timeToMax = 120) {
+  const r = Math.min(1, base + grow * Math.min(1, tSec / timeToMax));
+  return r;
+}
+
+// ----------------------------------------
+// Spawner wiring
+// 注：spawner.js の実装差異に強めに耐えるよう、ゆるくアダプト
+// 期待： new Spawner({ Bullets, config }) もしくは createSpawner({ ... })
+// ----------------------------------------
+function createSpawnerAdapter(cfg) {
+  // bullets injection
+  const Bullets = { NormalBullet, FastBullet, HomingBullet, KanjiBullet };
+  const S = SpawnerMod?.default || SpawnerMod?.Spawner || null;
+
+  if (typeof S === "function") {
+    return new S({ Bullets, config: cfg });
   }
-
-  function drawScoreStable(g, xRight, y, label, numText) {
-    g.save();
-    g.textAlign = "left";
-    const digitW = g.measureText("0").width;
-    const labelW = g.measureText(label).width;
-    let x = xRight - (labelW + digitW * numText.length);
-    g.fillText(label, x, y); x += labelW;
-    for (const ch of numText) { g.fillText(ch, x, y); x += digitW; }
-    g.restore();
+  if (typeof SpawnerMod.createSpawner === "function") {
+    return SpawnerMod.createSpawner({ Bullets, config: cfg });
   }
+  // フォールバック：最小実装（rain/side/ring/kanji/homing をざっくり）
+  let last = { rain: 0, side: 0, ring: 0, kanji: 0, homing: 0 };
+  return {
+    update(dt, nowSec) {
+      const s = cfg.spawns || {};
+      const bscale = cfg?.tuning?.bulletSpeedScale ?? 1.0;
 
-  function drawUI() {
-    const fontCfg = config.ui.font;
-    const colors = {
-      playing: fontCfg.normalColor,
-      safe:    fontCfg.penaltyColor,
-      bonus:   fontCfg.bonusColor,
-      gameover:"#ffffff",
-      title:   fontCfg.normalColor
-    };
-    g.font = "700 28px Orbitron, system-ui";
-    g.fillStyle = colors[state] || fontCfg.normalColor;
-    g.shadowColor = fontCfg.shadow.color;
-    g.shadowBlur = fontCfg.shadow.blur;
-    g.shadowOffsetX = fontCfg.shadow.offsetX;
-    g.shadowOffsetY = fontCfg.shadow.offsetY;
+      // helpers
+      function push(b) { if (b) bullets.push(b); }
 
-    const elapsed = isPlaying() ? gameTime : 0;
-
-    // 右上スコア（右端固定・等幅）
-    drawScoreStable(g, W - 12, 12 + 28, "SCORE ", String(Math.floor(score)).padStart(6, "0"));
-
-    // 左上 BEST/TIME
-    g.textAlign = "left";
-    g.fillText(`BEST ${String(Math.floor(bestScore)).padStart(6, "0")}`, 12, 40);
-    g.globalAlpha = 0.55;
-    g.fillText(`TIME ${elapsed.toFixed(1)}s`, 12, 58);
-    g.globalAlpha = 1;
-
-    if (state === "title") {
-      g.fillStyle = "rgba(255,255,255,0.92)";
-      g.font = "700 36px Orbitron, system-ui";
-      g.textAlign = "center";
-      g.fillText("Tap to Start", W/2, H/2 - 6);
-      g.font = "400 16px Noto Sans JP, system-ui";
-      g.fillText("ドラッグ／WASD／矢印で移動。Shift/Space低速。F2でデバッグ", W/2, H/2 + 22);
-
-      // ランキングTop10
-      g.textAlign = "right";
-      g.font = "700 18px Orbitron, system-ui";
-      g.fillStyle = "#ffffff";
-      const titleY = 92;
-      g.fillText("LEADERBOARD", W - 16, titleY);
-      g.font = "400 14px Noto Sans JP, system-ui";
-      const startY = titleY + 18;
-      const lineH = 18;
-      if (!rankClient.enabled) {
-        g.fillText("(未設定: config.rankApi.endpoint)", W - 16, startY);
-      } else if (!topRows.length) {
-        g.fillText("読み込み中… / 未投稿", W - 16, startY);
-      } else {
-        for (let i = 0; i < Math.min(10, topRows.length); i++) {
-          const r = topRows[i];
-          const name = (r.name ?? "—").toString().slice(0, 16);
-          const sc = String(r.score ?? 0).padStart(6, "0");
-          g.fillText(`${(i+1).toString().padStart(2," ")}. ${name}  ${sc}`, W - 16, startY + lineH * (i + 1));
+      // rain
+      last.rain += dt;
+      if (last.rain >= (s.rainEvery ?? 3.8)) {
+        last.rain = 0;
+        const n = Math.max(8, Math.floor(14 * difficultyMul(nowSec)));
+        for (let i = 0; i < n; i++) {
+          const x = (W / n) * (i + 0.5);
+          const y = -10;
+          const v = 90 * (0.9 + Math.random()*0.3) * bscale;
+          push(new NormalBullet(x, y, 0, v));
         }
       }
-      g.textAlign = "left";
-      g.font = "400 12px system-ui";
-      const pn = playerName ? `NAME: ${playerName}` : "NAME: （ベスト更新時に入力）";
-      g.fillText(pn, 12, H - 12);
-    }
 
-    if (state === "gameover") {
-      g.fillStyle = "rgba(0,0,0,0.5)";
-      g.fillRect(0, 0, W, H);
-      g.fillStyle = "#fff";
-      g.font = "700 44px Orbitron, system-ui";
-      g.textAlign = "center";
-      g.fillText("GAME OVER", W/2, H/2 - 10);
-      g.font = "400 16px Noto Sans JP, system-ui";
-      const now = performance.now() / 1000;
-      g.fillText(now >= restartAt ? "タップ / Space / Enter でタイトルへ" : "…", W/2, H/2 + 20);
-    }
-
-    if (showDebug) {
-      g.save();
-      g.shadowBlur = 0;
-      g.fillStyle = "rgba(255,255,255,0.85)";
-      g.font = "400 12px system-ui";
-      g.textAlign = "left";
-      g.fillText(`V=${V}  state=${state}  bullets=${bullets.length}`, 12, H - 28);
-      g.restore();
-    }
-  }
-
-  // ===== 入力 =====
-  function canRestartNow() { return performance.now() / 1000 >= restartAt; }
-  function onTapOrStart() {
-    if (!unlocked) { aud.unlock().catch(()=>{}); unlocked = true; }
-    if (state === "title") startGame();
-    else if (state === "gameover" && canRestartNow()) toTitle();
-  }
-  function onKey(e) {
-    if (e.key === "F2") showDebug = !showDebug;
-    if (state === "title" && (e.key === "Enter" || e.code === "Space")) startGame();
-    if (state === "gameover" && (e.key === "Enter" || e.code === "Space") && canRestartNow()) toTitle();
-
-    // デバッグキー
-    if (isPlaying() && e.key === "s") { state = "safe";  aud.playBgm("safe"); }
-    if (isPlaying() && e.key === "b") { state = "bonus"; aud.playBgm("bonus"); }
-    if (isPlaying() && e.key === "g") { gameOver(); }
-  }
-
-  function startGame() {
-    state = "playing";
-    gameTime = 0; last = 0; score = 0;
-    bullets = [];
-    spawner.reset();
-    aud.playBgm("normal");
-  }
-  function toTitle() {
-    state = "title";
-    bullets = [];
-    aud.playBgm("safe");
-    refreshTop();
-  }
-
-  async function maybeSubmitBest(newScore) {
-    if (!rankClient.enabled) return;
-    try {
-      if (!playerName) {
-        const nm = prompt("ランキング名（16文字まで）を入力してください", "YOU");
-        if (!nm) return;
-        playerName = nm.trim().slice(0, 16);
-        localStorage.setItem("playerName", playerName);
+      // side
+      last.side += dt;
+      if (last.side >= (s.sideEvery ?? 1.8)) {
+        last.side = 0;
+        const left = Math.random() < 0.5;
+        const y0 = 60 + Math.random() * (H - 120);
+        const count = Math.max(4, Math.floor(8 * difficultyMul(nowSec)));
+        for (let i = 0; i < count; i++) {
+          const x = left ? -10 : W + 10;
+          const vx = (left ? 140 : -140) * (0.9 + Math.random()*0.3) * bscale;
+          const vy = (Math.random()*2 - 1) * 20;
+          push(new FastBullet(x, y0 + i*8, vx, vy));
+        }
       }
-      const ua = (navigator.userAgent || "").slice(0, 64);
-      await rankClient.submit({ name: playerName, score: Math.floor(newScore), ua });
-      refreshTop();
-    } catch (e) {
-      console.warn("[rank] submit error:", e);
+
+      // ring
+      last.ring += dt;
+      if (last.ring >= (s.ringEvery ?? 9.0)) {
+        last.ring = 0;
+        const cx = 80 + Math.random()*(W-160);
+        const cy = 80 + Math.random()*(H-160);
+        const n = 24;
+        const spd = 130 * bscale;
+        for (let i = 0; i < n; i++) {
+          const a = (i / n) * Math.PI * 2;
+          const vx = Math.cos(a) * spd;
+          const vy = Math.sin(a) * spd;
+          push(new NormalBullet(cx, cy, vx, vy));
+        }
+      }
+
+      // kanji
+      last.kanji += dt;
+      if (last.kanji >= (s.kanjiEvery ?? 5.0)) {
+        last.kanji = 0;
+        const x = Math.random() * W;
+        const y = -20;
+        push(new KanjiBullet(x, y));
+      }
+
+      // homing
+      last.homing += dt;
+      if (last.homing >= (s.homingEvery ?? 4.5)) {
+        last.homing = 0;
+        const edge = Math.floor(Math.random()*4);
+        let x = 0, y = 0;
+        if (edge === 0) { x = Math.random()*W; y = -10; }
+        if (edge === 1) { x = W+10; y = Math.random()*H; }
+        if (edge === 2) { x = Math.random()*W; y = H+10; }
+        if (edge === 3) { x = -10; y = Math.random()*H; }
+        push(new HomingBullet(x, y));
+      }
     }
-  }
-
-  function gameOver() {
-    if (state === "gameover") return;
-    state = "gameover";
-    restartAt = performance.now() / 1000 + 0.7;
-    aud.playBgm("gameover");
-    if (config.audio?.sfx?.explode) aud.playSfx(config.audio.sfx.explode);
-    bullets = [];
-    if (spawner) spawner.paused = true;
-
-    if (score > 0 && Math.floor(score) > Math.floor(bestScore)) {
-      bestScore = Math.floor(score);
-      localStorage.setItem("bestScore", String(bestScore));
-      maybeSubmitBest(bestScore);
-    }
-  }
-
-  function applyZoneLogic(dt) {
-    if (state === "gameover") return;
-
-    const inSafe  = safeZones.playerInside(player.x, player.y, player.hitR);
-    const inBonus = !inSafe && bonusZone.playerInside(player.x, player.y);
-    let nextState = inSafe ? "safe" : (inBonus ? "bonus" : "playing");
-    if (state !== nextState) {
-      if (nextState === "safe")   { aud.playBgm("safe");   if (config.audio?.sfx?.zone_safe)   aud.playSfx(config.audio.sfx.zone_safe); }
-      if (nextState === "bonus")  { aud.playBgm("bonus");  if (config.audio?.sfx?.zone_bonus)  aud.playSfx(config.audio.sfx.zone_bonus); }
-      if (nextState === "playing"){ aud.playBgm("normal"); if (config.audio?.sfx?.zone_normal) aud.playSfx(config.audio.sfx.zone_normal); }
-      state = nextState;
-    }
-    if (state === "bonus") {
-      score += (config.score?.bonusPerSec ?? 1000) * dt;
-    } else if (state === "safe") {
-      score -= (config.score?.penaltyPerSec ?? 1000) * dt;
-      if (score <= 0) { score = 0; gameOver(); }
-    } else {
-      score += (config.score?.perSec ?? 100) * dt;
-    }
-  }
-
-  function updateBullets(dt) {
-    if (state === "gameover") return;
-
-    spawner.update(dt, gameTime, bullets, player);
-    const speedScale = (config.tuning && config.tuning.bulletSpeedScale) ?? 1;
-    const bdt = dt * speedScale;
-    const px = player.x, py = player.y, ph = player.hitR;
-    for (let i = bullets.length - 1; i >= 0; i--) {
-      const b = bullets[i];
-      b.update(bdt, player);
-      const dx = b.x - px, dy = b.y - py;
-      if (dx * dx + dy * dy < (b.hitR + ph) * (b.hitR + ph)) { gameOver(); return; }
-      if (b.x < -40 || b.x > W + 40 || b.y < -40 || b.y > H + 40) { bullets.splice(i, 1); }
-    }
-  }
-
-  function loop(ts) {
-    if (!last) last = ts;
-    const dt = Math.min(0.05, (ts - last) / 1000);
-    last = ts;
-
-    if (isPlaying()) {
-      gameTime += dt;
-      bonusZone.update(dt);
-      updateBullets(dt);
-      player.update(dt, input);
-      applyZoneLogic(dt);
-    }
-
-    g.fillStyle = "#000"; g.fillRect(0, 0, W, H);
-    if (bgImg) drawBG(dt);
-    safeZones.draw(g); bonusZone.draw(g);
-    for (const b of bullets) b.draw(g);
-    player.draw(g);
-    drawUI();
-    requestAnimationFrame(loop);
-  }
-
-  // ==== 起動 ====
-  aud = new AudioManager(config);
-  try { bgImg = await loadImage(config.background.image); } catch (e) { console.warn("bg load failed:", e); }
-
-  player = new Player(config);
-  player.load().catch(e => console.warn("[player] load error (fallback active)", e));
-
-  await loadBulletSprites();                // ← 先にスプライトを読む
-  spawner   = new Spawner(config, bulletsMod); // ← ★ 依存注入：bulletsMod を渡す
-  safeZones = new SafeZones(config);  await safeZones.load(config.ui?.sprites?.safe  || "assets/img/zone_safe.png");
-  bonusZone = new BonusZone(config);  await bonusZone.load(config.ui?.sprites?.bonus || "assets/img/zone_bonus.png");
-
-  if (rankClient.enabled) refreshTop();
-
-  // 入力
-  input = new Input(canvas);
-  canvas.addEventListener("pointerdown", onTapOrStart, { passive: true });
-  addEventListener("keydown", onKey);
-
-  // ループ開始
-  requestAnimationFrame(loop);
-  console.log(`[boot] ok V=${V} rank=${rankClient.enabled ? "on" : "off"}`);
+  };
 }
+
+// ----------------------------------------
+// Zones (safe bottom / bonus orbit center)
+// config.zones.safeH: 画面下からの高さ(px or ratio 0..1想定を自動判別)
+// config.zones.safeCols: 演出のみ（タイル線描画）
+// config.bonusMove: { r, speed, cx, cy } など（存在しなければ適当）
+// ----------------------------------------
+function valAsPx(v, total) {
+  if (v == null) return 0;
+  if (v > 0 && v <= 1.0) return v * total; // ratio
+  return v; // px
+}
+function getZonesNow(tSec) {
+  const zc = config?.zones || {};
+  const safeH = valAsPx(zc.safeH ?? 90, H);
+  const safeTop = H - safeH;
+
+  const bm = (config?.bonusMove) || {};
+  const cx = bm.cx ?? (W/2);
+  const cy = bm.cy ?? (H*0.45);
+  const R  = bm.r  ?? 70;
+  const sp = bm.speed ?? 0.6; // revolution per 10s-ish
+  const ang = tSec * sp; // radians/sec ざっくり
+  const bx = cx + Math.cos(ang) * R;
+  const by = cy + Math.sin(ang) * R;
+  const br = bm.radius ?? 48;
+
+  return { safeTop, safeH, bonus: { x: bx, y: by, r: br } };
+}
+
+function inCircle(px, py, cx, cy, r) {
+  const dx = px - cx, dy = py - cy;
+  return (dx*dx + dy*dy) <= (r*r);
+}
+
+// ----------------------------------------
+// State transitions
+// ----------------------------------------
+function enterTitle() {
+  state = TITLE;
+  timePlay = 0;
+  bullets.length = 0;
+  // BGM
+  crossfadeTo("title").catch(()=>{});
+  // Leaderboard
+  renderLeaderboard(rank, elLeaderboard).catch(()=>{});
+}
+
+function startGame() {
+  state = PLAY;
+  timePlay = 0;
+  score = 0;
+  bullets.length = 0;
+  player.x = W/2; player.y = H*0.8;
+  crossfadeTo("play").catch(()=>{});
+}
+
+function enterGameOver() {
+  state = OVER;
+  allowReturnAt = performance.now() + 700; // 0.7s 後にタイトルへ戻れる
+  bullets.length = 0; // 弾クリア
+  crossfadeTo("title").catch(()=>{}); // タイトルBGMへ戻す（好み）
+}
+
+// ----------------------------------------
+// Drawing helpers
+// ----------------------------------------
+function drawBG(tSec) {
+  // simple gradient bg
+  const g = ctx.createLinearGradient(0, 0, 0, H);
+  g.addColorStop(0, "#0b1020");
+  g.addColorStop(1, "#101a35");
+  ctx.fillStyle = g;
+  ctx.fillRect(0,0,W,H);
+}
+
+function drawZones(tSec) {
+  const z = getZonesNow(tSec);
+  // safe bottom
+  ctx.fillStyle = "rgba(20,200,120,0.10)";
+  ctx.fillRect(0, z.safeTop, W, z.safeH);
+
+  // grid (safeCols)
+  const cols = config?.zones?.safeCols ?? 0;
+  if (cols > 1) {
+    ctx.strokeStyle = "rgba(60,220,160,0.10)";
+    ctx.lineWidth = 1;
+    for (let i = 1; i < cols; i++) {
+      const x = (W / cols) * i;
+      ctx.beginPath(); ctx.moveTo(x, z.safeTop); ctx.lineTo(x, H); ctx.stroke();
+    }
+  }
+
+  // bonus orbit circle
+  ctx.beginPath();
+  ctx.arc(z.bonus.x, z.bonus.y, z.bonus.r, 0, Math.PI*2);
+  ctx.fillStyle = "rgba(250,210,60,0.12)";
+  ctx.fill();
+
+  // orbit indicator
+  ctx.strokeStyle = "rgba(250,210,60,0.25)";
+  ctx.lineWidth = 1;
+  const bm = config?.bonusMove || {};
+  const cx = bm.cx ?? (W/2);
+  const cy = bm.cy ?? (H*0.45);
+  const R  = bm.r  ?? 70;
+  ctx.beginPath();
+  ctx.arc(cx, cy, R, 0, Math.PI*2);
+  ctx.stroke();
+}
+
+function drawPlayer() {
+  // simple diamond player
+  ctx.save();
+  ctx.translate(player.x, player.y);
+  ctx.fillStyle = "#4cf";
+  const s = player.size;
+  ctx.beginPath();
+  ctx.moveTo(0, -s);
+  ctx.lineTo(s*0.7, 0);
+  ctx.lineTo(0, s);
+  ctx.lineTo(-s*0.7, 0);
+  ctx.closePath();
+  ctx.fill();
+
+  // hit circle
+  ctx.strokeStyle = "rgba(255,255,255,0.35)";
+  ctx.beginPath(); ctx.arc(0,0, player.hitR, 0, Math.PI*2); ctx.stroke();
+
+  ctx.restore();
+}
+
+function drawBullets() {
+  for (const b of bullets) {
+    b.draw?.(ctx);
+  }
+}
+
+function drawScore() {
+  // 等幅風：固定桁で右寄せ
+  const s = String(score | 0).padStart(6, "0");
+  ctx.font = "20px Orbitron, monospace";
+  ctx.textAlign = "right";
+  ctx.textBaseline = "top";
+  ctx.fillStyle = "#fff";
+  ctx.fillText(`SCORE  ${s}`, W - 16, 12);
+}
+
+function drawTitle() {
+  ctx.font = "48px Orbitron, sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillStyle = "#fff";
+  ctx.fillText("TAMAYOKE 2", W/2, H*0.36);
+
+  ctx.font = "18px Noto Sans JP, sans-serif";
+  ctx.fillText("クリック／Enter でスタート", W/2, H*0.36 + 56);
+}
+
+function drawGameOver() {
+  ctx.font = "46px Orbitron, sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillStyle = "#ff9";
+  ctx.fillText("GAME OVER", W/2, H*0.35);
+
+  ctx.font = "18px Noto Sans JP, sans-serif";
+  ctx.fillStyle = "#fff";
+  ctx.fillText("0.7秒後に クリック／Enter でタイトルへ", W/2, H*0.35 + 50);
+}
+
+function drawDebugOverlay(tSec, fps, bulletCount) {
+  if (!showDebug) return;
+  ctx.font = "12px monospace";
+  ctx.textAlign = "left";
+  ctx.textBaseline = "top";
+  ctx.fillStyle = "rgba(255,255,255,0.85)";
+  const lines = [
+    `V=${BUILD_V}  state=${state}`,
+    `time=${tSec.toFixed(2)}  fps=${fps|0}`,
+    `bullets=${bulletCount}  score=${score|0}`
+  ];
+  let y = H - 12*lines.length - 8;
+  for (const s of lines) {
+    ctx.fillText(s, 8, y);
+    y += 12;
+  }
+}
+
+// ----------------------------------------
+// Update
+// ----------------------------------------
+function updatePlayer(dt) {
+  // keyboard
+  let dx = 0, dy = 0;
+  if (keys.has("ArrowLeft") || keys.has("a") || keys.has("A")) dx -= 1;
+  if (keys.has("ArrowRight")|| keys.has("d") || keys.has("D")) dx += 1;
+  if (keys.has("ArrowUp")   || keys.has("w") || keys.has("W")) dy -= 1;
+  if (keys.has("ArrowDown") || keys.has("s") || keys.has("S")) dy += 1;
+
+  // drag pointer (優先度高)
+  if (pointerDown) {
+    player.x += (pointerX - player.x) * 0.35;
+    player.y += (pointerY - player.y) * 0.35;
+  } else if (dx || dy) {
+    const len = Math.hypot(dx,dy) || 1;
+    const slow = (keys.has("Shift") || keys.has(" ")) ? player.slow : 1.0;
+    const v = player.speed * slow;
+    player.x += (dx/len) * v * dt;
+    player.y += (dy/len) * v * dt;
+  }
+
+  // clamp
+  player.x = Math.max(0, Math.min(W, player.x));
+  player.y = Math.max(0, Math.min(H, player.y));
+}
+
+function updateBullets(dt, nowSec) {
+  // spawner
+  spawner?.update?.(dt, nowSec);
+
+  // bullets update + cull
+  for (const b of bullets) {
+    b.update?.(dt, player);
+  }
+  bullets = bullets.filter(b => b.alive !== false &&
+    b.x > -40 && b.x < W+40 && b.y > -40 && b.y < H+40);
+}
+
+function checkCollision() {
+  // circle-circle
+  for (const b of bullets) {
+    const br = (b.hitR ?? b.r ?? 6);
+    const dx = b.x - player.x;
+    const dy = b.y - player.y;
+    if (dx*dx + dy*dy <= (br + player.hitR) * (br + player.hitR)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// ----------------------------------------
+// Rank submission (best only)
+// ----------------------------------------
+async function submitIfBest(finalScore) {
+  const prev = loadBest();
+  if ((finalScore|0) <= prev) return;
+
+  saveBest(finalScore|0);
+
+  let name = loadPlayerName();
+  if (!name) {
+    name = (prompt("名前（16文字まで）を入力してください", "YOU") || "YOU").trim().slice(0,16);
+    savePlayerName(name);
+  }
+  const res = await rank.submit(name, finalScore|0);
+  if (res.status === "ok") {
+    // refresh leaderboard
+    renderLeaderboard(rank, elLeaderboard).catch(()=>{});
+  } else {
+    console.warn("rank submit failed:", res.error);
+  }
+}
+
+// ----------------------------------------
+// Main loop
+// ----------------------------------------
+let prevTs = performance.now();
+let fps = 60;
+
+function loop(ts) {
+  const dt = Math.min(1/20, Math.max(0, (ts - prevTs) / 1000)); // clamp dt
+  prevTs = ts;
+  fps = 0.9*fps + 0.1*(1/dt);
+
+  // input: global keys (state change)
+  if (state === TITLE) {
+    // start: Enter / click
+    if (keys.has("Enter") || pointerDown) {
+      startGame();
+      pointerDown = false; // avoid immediate re-trigger
+    }
+  } else if (state === PLAY) {
+    timePlay += dt;
+    updatePlayer(dt);
+    updateBullets(dt, timePlay);
+
+    // score: 時間 & ボーナスゾーン
+    const z = getZonesNow(timePlay);
+    const inBonus = inCircle(player.x, player.y, z.bonus.x, z.bonus.y, z.bonus.r);
+    score += (inBonus ? 4 : 1) * 10 * dt; // base 10pt/s, bonus 4x
+
+    // collision -> GAME OVER固定
+    if (checkCollision()) {
+      const finalScore = score|0;
+      submitIfBest(finalScore).catch(()=>{});
+      enterGameOver();
+    }
+  } else if (state === OVER) {
+    // wait then allow return
+    if ((performance.now() >= allowReturnAt) && (keys.has("Enter") || pointerDown)) {
+      pointerDown = false;
+      enterTitle();
+    }
+  }
+
+  // draw
+  drawBG(timePlay);
+  drawZones(timePlay);
+
+  if (state === TITLE) {
+    drawTitle();
+  } else if (state === PLAY) {
+    drawBullets();
+    drawPlayer();
+    drawScore();
+  } else if (state === OVER) {
+    drawBullets(); // クリア済みだが一応
+    drawGameOver();
+    drawScore();
+  }
+
+  drawDebugOverlay(timePlay, fps, bullets.length);
+
+  requestAnimationFrame(loop);
+}
+
+// ----------------------------------------
+// Boot
+// ----------------------------------------
+(async function boot() {
+  try {
+    config = await loadConfig();
+
+    // player tuning from config
+    if (config?.player) {
+      player.size  = config.player.size  ?? player.size;
+      player.hitR  = config.player.hitR  ?? player.hitR;
+      player.speed = config.player.speed ?? player.speed;
+      player.slow  = config.player.slow  ?? player.slow;
+    }
+
+    // rank
+    rank = new Rank((config.rankApi && config.rankApi.endpoint) || "");
+
+    // audio prepare
+    makeAC();
+    await prepareBgmFromConfig(config);
+    // 初期は AC は suspended の可能性 → ユーザー操作で unlockAudio()
+
+    // bullets images
+    await loadBulletSprites();
+
+    // spawner
+    spawner = createSpawnerAdapter(config);
+
+    // UI: debug toggle
+    window.addEventListener("keydown", (e)=>{
+      if (e.key === "F2") showDebug = !showDebug;
+    });
+
+    // start in title
+    enterTitle();
+    requestAnimationFrame(loop);
+  } catch (err) {
+    console.error(err);
+    ctx.fillStyle = "#fff";
+    ctx.font = "16px monospace";
+    ctx.fillText("BOOT ERROR: " + err.message, 12, 20);
+  }
+})();
