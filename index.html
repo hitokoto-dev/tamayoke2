@@ -31,16 +31,15 @@
 <script>
 /* ==========================================================
    tamayoke2 — 単一ファイル版
-   変更点：
-   - Playerは回転禁止（常に前向き）
-   - セーフゾーン内は当たり判定オフ
-   - 誘導弾：累計回頭角が閾値を超えたら追尾終了
-   - ボーナス半径 144（3倍）
-   - SCOREはmonospaceで数字固定幅 → ぶれ防止
+   変更点（今回）：
+   - 巨大漢字弾：5秒ごと／サイズ10倍（r=240）／追尾しない
+   - 誘導弾（青）：サイズ5倍（r=30）
+   - セーフゾーン：当たり無効 + スコア減少（20点/秒、0未満にならない）
+   - 以前の修正：SCOREぶれ防止／プレイヤー回転なし／リング廃止 等
    ========================================================== */
 
 // ★キャッシュ破り（毎回変えてください）
-const V = "fix-rotate-safe-homing-cap-bonusx3-scorelock-20250825-1";
+const V = "kanji10x-nonhoming-homing5x-safe-penalty-20250825-1";
 
 // ★GAS /exec
 const RANK_ENDPOINT = "https://script.google.com/macros/s/AKfycbxvQ-miSQfyYy2fEmeNstkb-WiHMtTeuJjl2KzuklxYc1UOeytF6F-O1KX1waNZ8QUO2w/exec";
@@ -62,6 +61,12 @@ const BGM_SRC = {
   play:   "assets/audio/bgm_stage1.mp3",
   result: "assets/audio/bgm_result.mp3",
 };
+
+// 調整ノブ
+const SAFE_H = 90;                 // セーフゾーン高さ
+const BONUS = { cx:480, cy:243, rOrbit:70, radius:144, speed:0.6 }; // ボーナス半径は大きめ
+const SAFE_PENALTY_PER_SEC = 20;   // セーフ中に減る点数（1秒あたり）
+const NORMAL_FALL_MIN = 90, NORMAL_FALL_RAND = 30; // 白い弾の落下速度
 
 // ---- ログ
 const blog = document.getElementById("bootlog");
@@ -177,10 +182,17 @@ async function boot(){
 
   const bgm = new BGM();
 
-  // ---------- ゾーン ----------
-  const SAFE_H = 90; // 下部セーフ高さ
-  const bonus = { cx:480, cy:243, rOrbit:70, radius:144, speed:0.6 }; // ← 3倍
+  // ---------- 背景 ----------
+  const stars = [{n:60, sp:10, pts:[]},{n:40, sp:20, pts:[]},{n:20, sp:35, pts:[]},];
+  for(const layer of stars){ for(let i=0;i<layer.n;i++) layer.pts.push({x:Math.random()*W, y:Math.random()*H}); }
+  function drawBG(t){
+    const bg=IMG.get("bg");
+    if(bg){ const y=(t*40)%H; ctx.drawImage(bg,0,y-H,W,H); ctx.drawImage(bg,0,y,W,H); }
+    else { const g=ctx.createLinearGradient(0,0,0,H); g.addColorStop(0,"#0b1020"); g.addColorStop(1,"#0f1830"); ctx.fillStyle=g; ctx.fillRect(0,0,W,H);
+      ctx.fillStyle="rgba(255,255,255,0.6)"; for(const layer of stars){ for(const p of layer.pts){ p.y += layer.sp*0.016; if(p.y>H) p.y-=H; ctx.fillRect(p.x, p.y, 1.2, 1.2);} } }
+  }
 
+  // ---------- ゾーン描画 ----------
   function drawZones(t){
     // セーフ（縦横比保持で高さ合わせ→横タイル）
     const texSafe=IMG.get("zoneSafe");
@@ -196,33 +208,23 @@ async function boot(){
     }
 
     // ボーナス（大きく）
-    const ang=t*bonus.speed, bx=bonus.cx+Math.cos(ang)*bonus.rOrbit, by=bonus.cy+Math.sin(ang)*bonus.rOrbit;
+    const ang=t*BONUS.speed, bx=BONUS.cx+Math.cos(ang)*BONUS.rOrbit, by=BONUS.cy+Math.sin(ang)*BONUS.rOrbit;
     const texB=IMG.get("zoneBonus");
-    if(texB){ ctx.save(); ctx.translate(bx,by); ctx.globalAlpha=0.95; ctx.drawImage(texB,-bonus.radius,-bonus.radius,bonus.radius*2,bonus.radius*2); ctx.globalAlpha=1; ctx.restore();
-      ctx.strokeStyle="rgba(250,210,60,0.25)"; ctx.beginPath(); ctx.arc(bonus.cx,bonus.cy,bonus.rOrbit,0,Math.PI*2); ctx.stroke();
-    }else{ ctx.fillStyle="rgba(250,210,60,0.12)"; ctx.beginPath(); ctx.arc(bx,by,bonus.radius,0,Math.PI*2); ctx.fill();
-      ctx.strokeStyle="rgba(250,210,60,0.25)"; ctx.beginPath(); ctx.arc(bonus.cx,bonus.cy,bonus.rOrbit,0,Math.PI*2); ctx.stroke(); }
+    if(texB){ ctx.save(); ctx.translate(bx,by); ctx.globalAlpha=0.95; ctx.drawImage(texB,-BONUS.radius,-BONUS.radius,BONUS.radius*2,BONUS.radius*2); ctx.globalAlpha=1; ctx.restore();
+      ctx.strokeStyle="rgba(250,210,60,0.25)"; ctx.beginPath(); ctx.arc(BONUS.cx,BONUS.cy,BONUS.rOrbit,0,Math.PI*2); ctx.stroke();
+    }else{ ctx.fillStyle="rgba(250,210,60,0.12)"; ctx.beginPath(); ctx.arc(bx,by,BONUS.radius,0,Math.PI*2); ctx.fill();
+      ctx.strokeStyle="rgba(250,210,60,0.25)"; ctx.beginPath(); ctx.arc(BONUS.cx,BONUS.cy,BONUS.rOrbit,0,Math.PI*2); ctx.stroke(); }
     return {bx,by};
   }
   function inCircle(px,py,cx,cy,r){ const dx=px-cx, dy=py-cy; return dx*dx+dy*dy <= r*r; }
-
-  // ---------- 背景 ----------
-  const stars = [{n:60, sp:10, pts:[]},{n:40, sp:20, pts:[]},{n:20, sp:35, pts:[]},];
-  for(const layer of stars){ for(let i=0;i<layer.n;i++) layer.pts.push({x:Math.random()*W, y:Math.random()*H}); }
-  function drawBG(t){
-    const bg=IMG.get("bg");
-    if(bg){ const y=(t*40)%H; ctx.drawImage(bg,0,y-H,W,H); ctx.drawImage(bg,0,y,W,H); }
-    else { const g=ctx.createLinearGradient(0,0,0,H); g.addColorStop(0,"#0b1020"); g.addColorStop(1,"#0f1830"); ctx.fillStyle=g; ctx.fillRect(0,0,W,H);
-      ctx.fillStyle="rgba(255,255,255,0.6)"; for(const layer of stars){ for(const p of layer.pts){ p.y += layer.sp*0.016; if(p.y>H) p.y-=H; ctx.fillRect(p.x, p.y, 1.2, 1.2);} } }
-  }
 
   // ---------- ゲーム状態 ----------
   const TITLE="title", PLAY="play", OVER="over";
   const player={ x:W/2, y:H*0.8, size:26, hitR:10, speed:245, slow:0.5, vx:0, vy:0 };
   let bullets=[], state=TITLE, allowReturnAt=0, timePlay=0, score=0;
 
-  // ---------- 弾 ----------
-  const timers={ rain:0, side:0, homing:0, kanji:0 }; // リング廃止済み
+  // ---------- 弾（リング廃止） ----------
+  const timers={ rain:0, side:0, homing:0, kanji:0 };
   function randomKanji(){ const s="炎雷風水土空光闇心愛夢星竜鬼斬破護爆迅煌零冥極華刹翔滅砲砕烈煌舞刃閃虎龍雷火光影彗".split(""); return s[(Math.random()*s.length)|0]; }
 
   function spawn(dt){
@@ -231,7 +233,7 @@ async function boot(){
     // 雨（白：遅め）
     if(timers.rain>=0.15){ timers.rain=0;
       const x=20+Math.random()*(W-40);
-      bullets.push({kind:"normal",x,y:-10,vx:0,vy:90+Math.random()*30,r:6,alive:true}); // 90〜120
+      bullets.push({kind:"normal",x,y:-10,vx:0,vy:NORMAL_FALL_MIN+Math.random()*NORMAL_FALL_RAND,r:6,alive:true});
     }
     // 横（赤：fast）
     if(timers.side>=1.1){ timers.side=0;
@@ -240,19 +242,20 @@ async function boot(){
         bullets.push({kind:"fast",x:L?-10:W+10,y:y0+i*9,vx:L?160:-160,vy:(Math.random()*2-1)*22,r:5,alive:true});
       }
     }
-    // 誘導（青）— 一定角度まで曲がったら追尾終了
+    // 誘導（青）— サイズ5倍
     if(timers.homing>=3.6){ timers.homing=0;
       const edge=(Math.random()*4)|0; let x=0,y=0;
       if(edge===0){x=Math.random()*W;y=-10;} if(edge===1){x=W+10;y=Math.random()*H;}
       if(edge===2){x=Math.random()*W;y=H+10;} if(edge===3){x=-10;y=Math.random()*H;}
       const ang=Math.atan2(player.y-y, player.x-x), v=145;
       bullets.push({kind:"homing",x,y,vx:Math.cos(ang)*v,vy:Math.sin(ang)*v,
-                    turnDeg:120, r:6, alive:true, homing:true, steeredDeg:0, maxSteerDeg:70});
+                    turnDeg:120, r:30, alive:true, homing:true, steeredDeg:0, maxSteerDeg:70}); // r:30（5倍）
     }
-    // 漢字弾（緩やか追尾）
+    // 巨大漢字弾 — 5秒ごと／サイズ10倍／追尾しない
     if(timers.kanji>=5.0){ timers.kanji=0;
+      const r=240; // 10倍
       const x=40+Math.random()*(W-80);
-      bullets.push({kind:"big",x,y:-30,vx:0,vy:95,turnDeg:60,r:24,alive:true,text:randomKanji()});
+      bullets.push({kind:"big",x,y:-r, vx:0, vy:95, r, alive:true, text:randomKanji()}); // turnしない
     }
   }
 
@@ -268,7 +271,7 @@ async function boot(){
       const vx=(dx/len)*v, vy=(dy/len)*v; player.x+=vx*dt; player.y+=vy*dt; player.vx=vx; player.vy=vy; }
     player.x=Math.max(0,Math.min(W,player.x)); player.y=Math.max(0,Math.min(H,player.y));
 
-    // 弾
+    // 弾スポーン＆移動
     spawn(dt);
     for(const b of bullets){
       if(b.homing){
@@ -280,26 +283,19 @@ async function boot(){
         b.steeredDeg += Math.abs(clamped)*180/Math.PI;
         const next=cur+clamped; const sp=Math.hypot(b.vx,b.vy)||145;
         b.vx=Math.cos(next)*sp; b.vy=Math.sin(next)*sp;
-        if(b.steeredDeg>=b.maxSteerDeg){ b.homing=false; } // 追尾終了 → まっすぐ外へ
-      } else if (b.kind==="big"){
-        const angTo=Math.atan2(player.y-b.y, player.x-b.x);
-        const cur=Math.atan2(b.vy,b.vx);
-        const max=(b.turnDeg*Math.PI/180)*dt;
-        let diff=angTo-cur; while(diff>Math.PI) diff-=Math.PI*2; while(diff<-Math.PI) diff+=Math.PI*2;
-        diff=Math.max(-max,Math.min(max,diff));
-        const next=cur+diff; const sp=Math.hypot(b.vx,b.vy)||110;
-        b.vx=Math.cos(next)*sp; b.vy=Math.sin(next)*sp;
+        if(b.steeredDeg>=b.maxSteerDeg){ b.homing=false; } // 追尾終了 → 直進
       }
+      // big は軌道を変えない（追尾処理なし）
       b.x+=b.vx*dt; b.y+=b.vy*dt;
       if(b.x<-80||b.x>W+80||b.y<-80||b.y>H+80) b.alive=false;
     }
     bullets=bullets.filter(b=>b.alive);
 
-    // セーフゾーン内なら当たり無効
+    // セーフゾーン内なら死亡なし
     const inSafe = (player.y >= H - SAFE_H + player.hitR*0.5);
     if(inSafe) return false;
 
-    // 当たり
+    // 当たり判定
     for(const b of bullets){
       const rr=(b.r+player.hitR), dx=b.x-player.x, dy=b.y-player.y;
       if(dx*dx+dy*dy<=rr*rr) return true;
@@ -321,10 +317,9 @@ async function boot(){
     const img=IMG.get("player");
     const s=player.size;
     ctx.save(); ctx.translate(player.x,player.y);
-    // ★回転しない（常に前向き）
+    // 回転しない（常に前向き）
     if(img){ ctx.drawImage(img, -s, -s, s*2, s*2); }
     else {
-      // 前向きのダイヤ風
       ctx.shadowColor="rgba(80,200,255,0.6)"; ctx.shadowBlur=20;
       ctx.fillStyle="#4cf"; ctx.beginPath();
       ctx.moveTo(0,-s); ctx.lineTo(s*0.7,0); ctx.lineTo(0,s); ctx.lineTo(-s*0.7,0); ctx.closePath(); ctx.fill();
@@ -342,8 +337,8 @@ async function boot(){
         const sp=IMG.get("b_big"); ctx.save(); ctx.translate(b.x,b.y);
         ctx.fillStyle="rgba(255,255,255,0.12)"; ctx.beginPath(); ctx.arc(0,0,b.r,0,Math.PI*2); ctx.fill();
         if(sp) ctx.drawImage(sp, -b.r, -b.r, b.r*2, b.r*2);
-        ctx.fillStyle="#fff"; ctx.textAlign="center"; ctx.textBaseline="middle"; ctx.font="bold 20px Noto Sans JP, sans-serif"; ctx.fillText(b.text||"炎",0,2);
-        ctx.fillStyle="#f55"; ctx.font="10px Noto Sans JP, sans-serif"; ctx.fillText("アツイ",0,-b.r+10);
+        ctx.fillStyle="#fff"; ctx.textAlign="center"; ctx.textBaseline="middle"; ctx.font="bold 40px Noto Sans JP, sans-serif"; ctx.fillText(b.text||"炎",0,4);
+        ctx.fillStyle="#f55"; ctx.font="18px Noto Sans JP, sans-serif"; ctx.fillText("アツイ",0,-b.r+22);
         ctx.restore();
       }
     }
@@ -352,13 +347,10 @@ async function boot(){
   function drawTitle(){ ctx.fillStyle="#fff"; ctx.textAlign="center"; ctx.textBaseline="middle"; ctx.font="64px Orbitron, sans-serif"; ctx.fillText("TAMAYOKE 2", W/2, H*0.33); ctx.font="18px Noto Sans JP, sans-serif"; ctx.fillText("クリック／Enter でスタート", W/2, H*0.33+56); }
   function drawGameOver(){ ctx.font="46px Orbitron, sans-serif"; ctx.textAlign="center"; ctx.textBaseline="middle"; ctx.fillStyle="#ff9"; ctx.fillText("GAME OVER", W/2, H*0.35); ctx.font="18px Noto Sans JP, sans-serif"; ctx.fillStyle="#fff"; ctx.fillText("0.7秒後に クリック／Enter でタイトルへ", W/2, H*0.35+50); }
 
-  // ★SCOREぶれ防止：数字はmonospaceで固定幅右寄せ
+  // SCOREぶれ防止：数字はmonospaceで固定幅右寄せ
   function drawScore(){
     const s=String(score|0).padStart(6,"0");
-    ctx.textBaseline="top";
-    ctx.textAlign="right";
-    ctx.font="20px monospace";
-    ctx.fillStyle="#fff";
+    ctx.textBaseline="top"; ctx.textAlign="right"; ctx.font="20px monospace"; ctx.fillStyle="#fff";
     ctx.fillText(s, W-16, 12);
     const w = ctx.measureText("000000").width;
     ctx.font="20px Orbitron, sans-serif";
@@ -390,6 +382,7 @@ async function boot(){
   let prev=performance.now(), tAccum=0;
   bl("title ready");
 
+  const bgm = new BGM();
   if(!AC) makeAC();
   if(ABUF.size){ bgm.play("title", 400); } else { padCrossTo("title", 400); }
 
@@ -399,12 +392,23 @@ async function boot(){
     drawBG(tAccum);
     const {bx,by}=drawZones(tAccum);
 
+    // セーフ／ボーナスの判定（スコア処理用）
+    const inSafeZone = (player.y >= H - SAFE_H + player.hitR*0.5);
+    const inBonus = inCircle(player.x,player.y,bx,by,BONUS.radius);
+
     if(state===TITLE){
       drawTitle();
       if(keys.has("Enter")||pointerDown){ pointerDown=false; state=PLAY; timePlay=0; score=0; bullets.length=0; unlockAudio(); if(ABUF.size){ bgm.play("play", 400); } else { padCrossTo("play", 400); } }
     }else if(state===PLAY){
-      timePlay+=dt; const bonusOn = inCircle(player.x,player.y,bx,by,bonus.radius);
-      score += (bonusOn?4:1)*10*dt;
+      timePlay+=dt;
+
+      // スコア：セーフ中は減点／それ以外は通常+ボーナス
+      if(inSafeZone){
+        score = Math.max(0, score - SAFE_PENALTY_PER_SEC * dt);
+      }else{
+        score += (inBonus?4:1)*10*dt;
+      }
+
       if(update(dt)){ const fs=score|0; thud(); submitScore(fs).catch(()=>{}); state=OVER; allowReturnAt=performance.now()+700; bullets.length=0; if(ABUF.size){ bgm.play("result", 400);} else { padCrossTo("title", 400);} }
       drawBullets(); drawPlayer(); drawScore();
     }else{ // OVER
