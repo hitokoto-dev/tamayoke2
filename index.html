@@ -30,16 +30,15 @@
 
 <script>
 /* ==========================================================
-   tamayoke2 — 単一ファイル版
-   変更点（今回）：
-   - 巨大漢字弾：5秒ごと／サイズ10倍（r=240）／追尾しない
-   - 誘導弾（青）：サイズ5倍（r=30）
-   - セーフゾーン：当たり無効 + スコア減少（20点/秒、0未満にならない）
-   - 以前の修正：SCOREぶれ防止／プレイヤー回転なし／リング廃止 等
+   tamayoke2 — 単一ファイル版（要望反映）
+   - 巨大漢字弾: 5s周期, r=240, ノンホーミング（軌道固定）
+   - 誘導弾(青): r=30, 累計70°で追尾終了→直進
+   - セーフゾーン: 当たり無効 + 20点/秒 減点（スコア0未満なし）
+   - SCOREぶれ防止 / プレイヤー回転なし / リング廃止
    ========================================================== */
 
-// ★キャッシュ破り（毎回変えてください）
-const V = "kanji10x-nonhoming-homing5x-safe-penalty-20250825-1";
+// ★キャッシュ破り（毎回変える）
+const V = "fix-giant10x-nonhoming-homing5x-safe-penalty-20250825-2";
 
 // ★GAS /exec
 const RANK_ENDPOINT = "https://script.google.com/macros/s/AKfycbxvQ-miSQfyYy2fEmeNstkb-WiHMtTeuJjl2KzuklxYc1UOeytF6F-O1KX1waNZ8QUO2w/exec";
@@ -62,11 +61,12 @@ const BGM_SRC = {
   result: "assets/audio/bgm_result.mp3",
 };
 
-// 調整ノブ
-const SAFE_H = 90;                 // セーフゾーン高さ
-const BONUS = { cx:480, cy:243, rOrbit:70, radius:144, speed:0.6 }; // ボーナス半径は大きめ
-const SAFE_PENALTY_PER_SEC = 20;   // セーフ中に減る点数（1秒あたり）
-const NORMAL_FALL_MIN = 90, NORMAL_FALL_RAND = 30; // 白い弾の落下速度
+// ---- 調整ノブ ----
+const SAFE_H = 90;                         // セーフゾーン高さ
+const BONUS = { cx:480, cy:243, rOrbit:70, radius:144, speed:0.6 }; // ボーナス大
+const SAFE_PENALTY_PER_SEC = 20;           // セーフ中の減点速度
+const NORMAL_FALL_MIN = 90, NORMAL_FALL_RAND = 30; // 白弾速度
+const HOMING_MAX_STEER_DEG = 70;           // 誘導の累計回頭角
 
 // ---- ログ
 const blog = document.getElementById("bootlog");
@@ -207,7 +207,7 @@ async function boot(){
       ctx.fillStyle="rgba(20,200,120,0.10)"; ctx.fillRect(0,H-SAFE_H,W,SAFE_H);
     }
 
-    // ボーナス（大きく）
+    // ボーナス（大きめ）
     const ang=t*BONUS.speed, bx=BONUS.cx+Math.cos(ang)*BONUS.rOrbit, by=BONUS.cy+Math.sin(ang)*BONUS.rOrbit;
     const texB=IMG.get("zoneBonus");
     if(texB){ ctx.save(); ctx.translate(bx,by); ctx.globalAlpha=0.95; ctx.drawImage(texB,-BONUS.radius,-BONUS.radius,BONUS.radius*2,BONUS.radius*2); ctx.globalAlpha=1; ctx.restore();
@@ -242,20 +242,20 @@ async function boot(){
         bullets.push({kind:"fast",x:L?-10:W+10,y:y0+i*9,vx:L?160:-160,vy:(Math.random()*2-1)*22,r:5,alive:true});
       }
     }
-    // 誘導（青）— サイズ5倍
+    // 誘導（青）— r=30（5倍）
     if(timers.homing>=3.6){ timers.homing=0;
       const edge=(Math.random()*4)|0; let x=0,y=0;
       if(edge===0){x=Math.random()*W;y=-10;} if(edge===1){x=W+10;y=Math.random()*H;}
       if(edge===2){x=Math.random()*W;y=H+10;} if(edge===3){x=-10;y=Math.random()*H;}
       const ang=Math.atan2(player.y-y, player.x-x), v=145;
       bullets.push({kind:"homing",x,y,vx:Math.cos(ang)*v,vy:Math.sin(ang)*v,
-                    turnDeg:120, r:30, alive:true, homing:true, steeredDeg:0, maxSteerDeg:70}); // r:30（5倍）
+                    turnDeg:120, r:30, alive:true, homing:true, steeredDeg:0, maxSteerDeg:HOMING_MAX_STEER_DEG});
     }
-    // 巨大漢字弾 — 5秒ごと／サイズ10倍／追尾しない
+    // 巨大漢字弾 — 5sごと / r=240 / 追尾しない
     if(timers.kanji>=5.0){ timers.kanji=0;
       const r=240; // 10倍
-      const x=40+Math.random()*(W-80);
-      bullets.push({kind:"big",x,y:-r, vx:0, vy:95, r, alive:true, text:randomKanji()}); // turnしない
+      const x = Math.max(r+10, Math.min(W-(r+10), Math.random()*W)); // 画面内に出す
+      bullets.push({kind:"big",x,y:-r, vx:0, vy:95, r, alive:true, text:randomKanji()}); // ノンホーミング
     }
   }
 
@@ -283,15 +283,15 @@ async function boot(){
         b.steeredDeg += Math.abs(clamped)*180/Math.PI;
         const next=cur+clamped; const sp=Math.hypot(b.vx,b.vy)||145;
         b.vx=Math.cos(next)*sp; b.vy=Math.sin(next)*sp;
-        if(b.steeredDeg>=b.maxSteerDeg){ b.homing=false; } // 追尾終了 → 直進
+        if(b.steeredDeg>=b.maxSteerDeg){ b.homing=false; } // 追尾終了→直進
       }
-      // big は軌道を変えない（追尾処理なし）
+      // big は一切曲げない（処理なし）
       b.x+=b.vx*dt; b.y+=b.vy*dt;
       if(b.x<-80||b.x>W+80||b.y<-80||b.y>H+80) b.alive=false;
     }
     bullets=bullets.filter(b=>b.alive);
 
-    // セーフゾーン内なら死亡なし
+    // セーフゾーン内なら死亡なし（完全無効）
     const inSafe = (player.y >= H - SAFE_H + player.hitR*0.5);
     if(inSafe) return false;
 
@@ -337,8 +337,8 @@ async function boot(){
         const sp=IMG.get("b_big"); ctx.save(); ctx.translate(b.x,b.y);
         ctx.fillStyle="rgba(255,255,255,0.12)"; ctx.beginPath(); ctx.arc(0,0,b.r,0,Math.PI*2); ctx.fill();
         if(sp) ctx.drawImage(sp, -b.r, -b.r, b.r*2, b.r*2);
-        ctx.fillStyle="#fff"; ctx.textAlign="center"; ctx.textBaseline="middle"; ctx.font="bold 40px Noto Sans JP, sans-serif"; ctx.fillText(b.text||"炎",0,4);
-        ctx.fillStyle="#f55"; ctx.font="18px Noto Sans JP, sans-serif"; ctx.fillText("アツイ",0,-b.r+22);
+        ctx.fillStyle="#fff"; ctx.textAlign="center"; ctx.textBaseline="middle"; ctx.font="bold "+Math.floor(b.r*0.18)+"px Noto Sans JP, sans-serif"; ctx.fillText(b.text||"炎",0,4);
+        ctx.fillStyle="#f55"; ctx.font=Math.floor(b.r*0.075)+"px Noto Sans JP, sans-serif"; ctx.fillText("アツイ",0,-b.r+Math.max(14,Math.floor(b.r*0.09)));
         ctx.restore();
       }
     }
@@ -392,7 +392,7 @@ async function boot(){
     drawBG(tAccum);
     const {bx,by}=drawZones(tAccum);
 
-    // セーフ／ボーナスの判定（スコア処理用）
+    // 判定（スコア用）
     const inSafeZone = (player.y >= H - SAFE_H + player.hitR*0.5);
     const inBonus = inCircle(player.x,player.y,bx,by,BONUS.radius);
 
@@ -402,7 +402,7 @@ async function boot(){
     }else if(state===PLAY){
       timePlay+=dt;
 
-      // スコア：セーフ中は減点／それ以外は通常+ボーナス
+      // スコア：セーフ中は減点（0未満にならない）／それ以外は通常+ボーナス
       if(inSafeZone){
         score = Math.max(0, score - SAFE_PENALTY_PER_SEC * dt);
       }else{
