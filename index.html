@@ -30,19 +30,12 @@
 
 <script>
 /* ==========================================================
-   tamayoke2 — 単一ファイル拡張版
-   ・外部JS/設定に依存しない（1ファイル完結）
-   ・PNGがあれば使用：assets/…
-       - assets/player/player.png
-       - assets/bg/layer1.png, layer2.png, layer3.png（任意）
-       - assets/bullets/{white,red,blue,kanji}.png
-     無ければすべて自動フォールバック描画
-   ・BGM（WebAudio自作パッド・クロスフェード）＆効果音
-   ・GASランキングは直指定。初回は必ず送信
+   tamayoke2 — 単一ファイル 拡張版（assets/img/ に対応）
+   画像が無くても必ず動作（フォールバック描画）
    ========================================================== */
 
-// ★毎回変える（キャッシュ破り表示用）
-const V = "oneshot-20250825-ultimate-3";
+// ★キャッシュ破り（毎回変えてください）
+const V = "assets-img-20250825-1";
 
 // ★あなたの GAS /exec（直指定）
 const RANK_ENDPOINT = "https://script.google.com/macros/s/AKfycbxvQ-miSQfyYy2fEmeNstkb-WiHMtTeuJjl2KzuklxYc1UOeytF6F-O1KX1waNZ8QUO2w/exec";
@@ -61,23 +54,25 @@ async function boot(){
   if(!canvas) throw new Error("#g canvas not found");
   const ctx = canvas.getContext("2d");
   const W=canvas.width, H=canvas.height;
-
   function fit(){ const s=Math.min(innerWidth/W, innerHeight/H); canvas.style.width=`${(W*s)|0}px`; canvas.style.height=`${(H*s)|0}px`; }
   addEventListener("resize",fit); fit();
 
-  // ---------- 画像ローダ（任意） ----------
+  // ---------- 画像ローダ（assets/img/... に対応） ----------
   const IMG = new Map();
   async function loadImage(url){ return new Promise((res,rej)=>{ const i=new Image(); i.onload=()=>res(i); i.onerror=rej; i.src=url; }); }
   async function tryLoad(key,url){ try{ const img=await loadImage(url); IMG.set(key,img); bl("img ok: "+url); }catch{ bl("img miss: "+url); } }
   await Promise.all([
-    tryLoad("player","assets/player/player.png"),
-    tryLoad("bg1","assets/bg/layer1.png"),
-    tryLoad("bg2","assets/bg/layer2.png"),
-    tryLoad("bg3","assets/bg/layer3.png"),
-    tryLoad("b_white","assets/bullets/white.png"),
-    tryLoad("b_red","assets/bullets/red.png"),
-    tryLoad("b_blue","assets/bullets/blue.png"),
-    tryLoad("b_kanji","assets/bullets/kanji.png"),
+    // 背景＆ゾーン
+    tryLoad("bg","assets/img/bg_mechcity_loop.png"),
+    tryLoad("zoneSafe","assets/img/zone_safe.png"),
+    tryLoad("zoneBonus","assets/img/zone_bonus.png"),
+    // 自機
+    tryLoad("player","assets/img/player.png"),
+    // 弾
+    tryLoad("b_normal","assets/img/bullet_normal.png"),
+    tryLoad("b_fast","assets/img/bullet_fast.png"),
+    tryLoad("b_homing","assets/img/bullet_homing.png"),
+    tryLoad("b_big","assets/img/bullet_big.png"),
   ]);
 
   // ---------- ランキング ----------
@@ -95,7 +90,6 @@ async function boot(){
     }
   }
   const rank = new Rank(RANK_ENDPOINT);
-
   async function renderLeaderboard(){
     if(!elLB) return;
     if(!rank.enabled){ elLB.textContent="未設定"; return; }
@@ -193,37 +187,42 @@ async function boot(){
 
   function drawZones(t){
     // セーフ
-    ctx.fillStyle="rgba(20,200,120,0.10)"; ctx.fillRect(0, H-SAFE_H, W, SAFE_H);
-    // ボーナス
+    const texSafe=IMG.get("zoneSafe");
+    if(texSafe){
+      const y=H-SAFE_H; ctx.globalAlpha=0.9; ctx.drawImage(texSafe,0,y,W,SAFE_H); ctx.globalAlpha=1;
+    }else{
+      ctx.fillStyle="rgba(20,200,120,0.10)"; ctx.fillRect(0, H-SAFE_H, W, SAFE_H);
+    }
+    // ボーナス（移動円）
     const ang=t*bonus.speed, bx=bonus.cx+Math.cos(ang)*bonus.rOrbit, by=bonus.cy+Math.sin(ang)*bonus.rOrbit;
-    ctx.fillStyle="rgba(250,210,60,0.12)";
-    ctx.beginPath(); ctx.arc(bx,by,bonus.radius,0,Math.PI*2); ctx.fill();
-    ctx.strokeStyle="rgba(250,210,60,0.25)"; ctx.beginPath(); ctx.arc(bonus.cx,bonus.cy,bonus.rOrbit,0,Math.PI*2); ctx.stroke();
+    const texB=IMG.get("zoneBonus");
+    if(texB){
+      ctx.save(); ctx.translate(bx,by);
+      ctx.globalAlpha=0.9; ctx.drawImage(texB, -bonus.radius, -bonus.radius, bonus.radius*2, bonus.radius*2); ctx.globalAlpha=1;
+      ctx.restore();
+      ctx.strokeStyle="rgba(250,210,60,0.25)"; ctx.beginPath(); ctx.arc(bonus.cx,bonus.cy,bonus.rOrbit,0,Math.PI*2); ctx.stroke();
+    }else{
+      ctx.fillStyle="rgba(250,210,60,0.12)";
+      ctx.beginPath(); ctx.arc(bx,by,bonus.radius,0,Math.PI*2); ctx.fill();
+      ctx.strokeStyle="rgba(250,210,60,0.25)"; ctx.beginPath(); ctx.arc(bonus.cx,bonus.cy,bonus.rOrbit,0,Math.PI*2); ctx.stroke();
+    }
     return {bx,by};
   }
   function inCircle(px,py,cx,cy,r){ const dx=px-cx, dy=py-cy; return dx*dx+dy*dy <= r*r; }
 
-  // ---------- 背景（パララックス＋画像があれば合成） ----------
-  const stars = [
-    {n:60, s:12, sp:10, pts:[]},
-    {n:40, s:18, sp:20, pts:[]},
-    {n:20, s:26, sp:35, pts:[]},
-  ];
-  for(const layer of stars){
-    for(let i=0;i<layer.n;i++){ layer.pts.push({x:Math.random()*W, y:Math.random()*H}); }
-  }
-  function drawBG(dtAcc){
-    // グラデ
-    const g=ctx.createLinearGradient(0,0,0,H); g.addColorStop(0,"#0b1020"); g.addColorStop(1,"#0f1830"); ctx.fillStyle=g; ctx.fillRect(0,0,W,H);
-    // 画像レイヤ（任意）
-    const bg1=IMG.get("bg1"), bg2=IMG.get("bg2"), bg3=IMG.get("bg3");
-    if(bg1){ const y=(dtAcc*20)%H; ctx.globalAlpha=0.7; ctx.drawImage(bg1,0,y-H,W,H); ctx.drawImage(bg1,0,y,W,H); ctx.globalAlpha=1; }
-    if(bg2){ const y=(dtAcc*35)%H; ctx.globalAlpha=0.4; ctx.drawImage(bg2,0,y-H,W,H); ctx.drawImage(bg2,0,y,W,H); ctx.globalAlpha=1; }
-    if(bg3){ const y=(dtAcc*55)%H; ctx.globalAlpha=0.25; ctx.drawImage(bg3,0,y-H,W,H); ctx.drawImage(bg3,0,y,W,H); ctx.globalAlpha=1; }
-    // パララックススター
-    ctx.fillStyle="rgba(255,255,255,0.6)";
-    for(const layer of stars){
-      for(const p of layer.pts){ p.y += layer.sp*0.016; if(p.y>H) p.y-=H; ctx.fillRect(p.x, p.y, 1.2, 1.2); }
+  // ---------- 背景（テクスチャがあればループ、無ければ星空） ----------
+  const stars = [{n:60, sp:10, pts:[]},{n:40, sp:20, pts:[]},{n:20, sp:35, pts:[]},];
+  for(const layer of stars){ for(let i=0;i<layer.n;i++) layer.pts.push({x:Math.random()*W, y:Math.random()*H}); }
+  function drawBG(t){
+    const bg=IMG.get("bg");
+    if(bg){
+      const y=(t*40)%H;
+      ctx.drawImage(bg,0,y-H,W,H); ctx.drawImage(bg,0,y,W,H);
+    }else{
+      const g=ctx.createLinearGradient(0,0,0,H); g.addColorStop(0,"#0b1020"); g.addColorStop(1,"#0f1830");
+      ctx.fillStyle=g; ctx.fillRect(0,0,W,H);
+      ctx.fillStyle="rgba(255,255,255,0.6)";
+      for(const layer of stars){ for(const p of layer.pts){ p.y += layer.sp*0.016; if(p.y>H) p.y-=H; ctx.fillRect(p.x, p.y, 1.2, 1.2);} }
     }
   }
 
@@ -242,19 +241,19 @@ async function boot(){
     // 雨（白）
     if(timers.rain>=0.15){ timers.rain=0;
       const x=20+Math.random()*(W-40);
-      bullets.push({kind:"white",x,y:-10,vx:0,vy:140+Math.random()*50,r:6,alive:true});
+      bullets.push({kind:"normal",x,y:-10,vx:0,vy:140+Math.random()*50,r:6,alive:true});
     }
-    // 横（赤）
+    // 横（赤：fast）
     if(timers.side>=1.1){ timers.side=0;
       const L=Math.random()<0.5, y0=60+Math.random()*(H-220);
       for(let i=0;i<7;i++){
-        bullets.push({kind:"red",x:L?-10:W+10,y:y0+i*9,vx:L?160:-160,vy:(Math.random()*2-1)*22,r:5,alive:true});
+        bullets.push({kind:"fast",x:L?-10:W+10,y:y0+i*9,vx:L?160:-160,vy:(Math.random()*2-1)*22,r:5,alive:true});
       }
     }
     // リング（白）
     if(timers.ring>=2.4){ timers.ring=0;
       const cx=80+Math.random()*(W-160), cy=80+Math.random()*(H-220), n=24, spd=135;
-      for(let i=0;i<n;i++){ const a=i/n*Math.PI*2; bullets.push({kind:"white",x:cx,y:cy,vx:Math.cos(a)*spd,vy:Math.sin(a)*spd,r:6,alive:true}); }
+      for(let i=0;i<n;i++){ const a=i/n*Math.PI*2; bullets.push({kind:"normal",x:cx,y:cy,vx:Math.cos(a)*spd,vy:Math.sin(a)*spd,r:6,alive:true}); }
     }
     // 誘導（青）
     if(timers.homing>=3.6){ timers.homing=0;
@@ -262,12 +261,12 @@ async function boot(){
       if(edge===0){x=Math.random()*W;y=-10;} if(edge===1){x=W+10;y=Math.random()*H;}
       if(edge===2){x=Math.random()*W;y=H+10;} if(edge===3){x=-10;y=Math.random()*H;}
       const ang=Math.atan2(player.y-y, player.x-x), v=145;
-      bullets.push({kind:"blue",x,y,vx:Math.cos(ang)*v,vy:Math.sin(ang)*v,turnDeg:120,r:6,alive:true,homing:true});
+      bullets.push({kind:"homing",x,y,vx:Math.cos(ang)*v,vy:Math.sin(ang)*v,turnDeg:120,r:6,alive:true,homing:true});
     }
-    // 巨大漢字弾（緩やか追尾）
+    // 巨大（漢字風）弾
     if(timers.kanji>=5.0){ timers.kanji=0;
       const x=40+Math.random()*(W-80);
-      bullets.push({kind:"kanji",x,y:-30,vx:0,vy:95,turnDeg:60,r:24,alive:true,text:randomKanji()});
+      bullets.push({kind:"big",x,y:-30,vx:0,vy:95,turnDeg:60,r:24,alive:true,text:randomKanji()});
     }
   }
 
@@ -278,7 +277,7 @@ async function boot(){
     if(keys.has("ArrowRight")||keys.has("d")||keys.has("D")) dx+=1;
     if(keys.has("ArrowUp")||keys.has("w")||keys.has("W")) dy-=1;
     if(keys.has("ArrowDown")||keys.has("s")||keys.has("S")) dy+=1;
-    if(pointerDown){ player.x+=(pointerX-player.x)*0.35; player.y+=(pointerY-player.y)*0.35; player.vx= (pointerX-player.x); player.vy=(pointerY-player.y); }
+    if(pointerDown){ player.x+=(pointerX-player.x)*0.35; player.y+=(pointerY-player.y)*0.35; player.vx=(pointerX-player.x); player.vy=(pointerY-player.y); }
     else if(dx||dy){ const len=Math.hypot(dx,dy)||1; const v=player.speed*((keys.has("Shift")||keys.has(" "))?player.slow:1);
       const vx=(dx/len)*v, vy=(dy/len)*v; player.x+=vx*dt; player.y+=vy*dt; player.vx=vx; player.vy=vy; }
     player.x=Math.max(0,Math.min(W,player.x)); player.y=Math.max(0,Math.min(H,player.y));
@@ -294,7 +293,7 @@ async function boot(){
         diff=Math.max(-max,Math.min(max,diff));
         const next=cur+diff; const sp=Math.hypot(b.vx,b.vy)||145;
         b.vx=Math.cos(next)*sp; b.vy=Math.sin(next)*sp;
-      } else if (b.kind==="kanji"){
+      } else if (b.kind==="big"){
         // 緩やか追尾
         const angTo=Math.atan2(player.y-b.y, player.x-b.x);
         const cur=Math.atan2(b.vy,b.vx);
@@ -325,21 +324,19 @@ async function boot(){
     const s=player.size;
     if(img){ ctx.drawImage(img, -s, -s, s*2, s*2); }
     else {
-      // フォールバック：ダイヤ＋グロー
       ctx.shadowColor="rgba(80,200,255,0.6)"; ctx.shadowBlur=20;
       ctx.fillStyle="#4cf"; ctx.beginPath(); ctx.moveTo(0,-s); ctx.lineTo(s*0.7,0); ctx.lineTo(0,s); ctx.lineTo(-s*0.7,0); ctx.closePath(); ctx.fill();
-      ctx.shadowBlur=0;
-      ctx.strokeStyle="rgba(255,255,255,0.35)"; ctx.beginPath(); ctx.arc(0,0,player.hitR,0,Math.PI*2); ctx.stroke();
+      ctx.shadowBlur=0; ctx.strokeStyle="rgba(255,255,255,0.35)"; ctx.beginPath(); ctx.arc(0,0,player.hitR,0,Math.PI*2); ctx.stroke();
     }
     ctx.restore();
   }
   function drawBullets(){
     for(const b of bullets){
-      if(b.kind==="white"){ const sp=IMG.get("b_white"); if(sp) ctx.drawImage(sp,b.x-b.r,b.y-b.r,b.r*2,b.r*2); else { ctx.fillStyle="#fff"; ctx.beginPath(); ctx.arc(b.x,b.y,b.r,0,Math.PI*2); ctx.fill(); } }
-      else if(b.kind==="red"){ const sp=IMG.get("b_red"); if(sp) ctx.drawImage(sp,b.x-b.r,b.y-b.r,b.r*2,b.r*2); else { ctx.fillStyle="#f55"; ctx.beginPath(); ctx.arc(b.x,b.y,b.r,0,Math.PI*2); ctx.fill(); } }
-      else if(b.kind==="blue"){ const sp=IMG.get("b_blue"); if(sp) ctx.drawImage(sp,b.x-b.r,b.y-b.r,b.r*2,b.r*2); else { ctx.fillStyle="#6cf"; ctx.beginPath(); ctx.arc(b.x,b.y,b.r,0,Math.PI*2); ctx.fill(); } }
-      else if(b.kind==="kanji"){
-        const sp=IMG.get("b_kanji");
+      if(b.kind==="normal"){ const sp=IMG.get("b_normal"); if(sp) ctx.drawImage(sp,b.x-b.r,b.y-b.r,b.r*2,b.r*2); else { ctx.fillStyle="#fff"; ctx.beginPath(); ctx.arc(b.x,b.y,b.r,0,Math.PI*2); ctx.fill(); } }
+      else if(b.kind==="fast"){ const sp=IMG.get("b_fast"); if(sp) ctx.drawImage(sp,b.x-b.r,b.y-b.r,b.r*2,b.r*2); else { ctx.fillStyle="#f55"; ctx.beginPath(); ctx.arc(b.x,b.y,b.r,0,Math.PI*2); ctx.fill(); } }
+      else if(b.kind==="homing"){ const sp=IMG.get("b_homing"); if(sp) ctx.drawImage(sp,b.x-b.r,b.y-b.r,b.r*2,b.r*2); else { ctx.fillStyle="#6cf"; ctx.beginPath(); ctx.arc(b.x,b.y,b.r,0,Math.PI*2); ctx.fill(); } }
+      else if(b.kind==="big"){
+        const sp=IMG.get("b_big");
         ctx.save(); ctx.translate(b.x,b.y);
         ctx.fillStyle="rgba(255,255,255,0.12)"; ctx.beginPath(); ctx.arc(0,0,b.r,0,Math.PI*2); ctx.fill();
         if(sp) ctx.drawImage(sp, -b.r, -b.r, b.r*2, b.r*2);
