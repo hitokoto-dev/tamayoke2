@@ -11,5 +11,7 @@
       "play":  { "src": "assets/audio/play.ogg",  "loopStart": 0.0, "loopEnd": 0.0 }
     }
   },
-  "rankApi": { "endpoint": "" }
+  "rankApi": {
+    "endpoint": "https://script.google.com/macros/s/AKfycbxvQ-miSQfyYy2fEmeNstkb-WiHMtTeuJjl2KzuklxYc1UOeytF6F-O1KX1waNZ8QUO2w/exec"
+  }
 }
