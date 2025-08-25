@@ -26,13 +26,14 @@
   <div class="brand">tamayoke2</div>
 
   <script>
-    // ★キャッシュ破り（必ず毎回新しい値に）
-    const V = "full-restore-20250825-3";
+    // ★毎回新しい値に（キャッシュ破り）
+    const V = "one-shot-20250825-1";
     window.V = V;
-    // 必要なら明示オーバーライド（configより優先）
-    // window.RANK_ENDPOINT = "https://script.google.com/macros/s/......../exec";
+
+    // ★あなたの GAS /exec（直指定・configは使いません）
+    window.RANK_ENDPOINT = "https://script.google.com/macros/s/AKfycbxvQ-miSQfyYy2fEmeNstkb-WiHMtTeuJjl2KzuklxYc1UOeytF6F-O1KX1waNZ8QUO2w/exec";
   </script>
 
-  <script type="module" src="./js/main.js?v=full-restore-20250825-3"></script>
+  <script type="module" src="./js/main.js?v=one-shot-20250825-1"></script>
 </body>
 </html>
