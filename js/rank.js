@@ -1,10 +1,11 @@
-// js/rank.js — ランキング（GAS）最小実装＋検出ヘルパ
+// js/rank.js — ランキング（GAS）本番実装＋検出/保存ヘルパ
+
 export async function detectRankEndpoint() {
-  // 1) 明示オーバーライド（index.htmlで window.RANK_ENDPOINT をセットしていれば優先）
+  // 1) 明示上書き（index.html で window.RANK_ENDPOINT をセットしていれば優先）
   const over = (globalThis.RANK_ENDPOINT && String(globalThis.RANK_ENDPOINT).trim()) || "";
   if (over) return over;
 
-  // 2) config/game.json から読む（V でキャッシュ破り）
+  // 2) config/game.json から取得（V でキャッシュ破り）
   const v = encodeURIComponent(globalThis.V || Date.now());
   try {
     const r = await fetch(`./config/game.json?v=${v}`, { cache: "no-store" });
@@ -19,7 +20,7 @@ export async function detectRankEndpoint() {
 export class Rank {
   constructor(endpoint) {
     this.endpoint = String(endpoint || "").trim();
-    this.enabled = !!this.endpoint;
+    this.enabled  = !!this.endpoint;
   }
   async top() {
     if (!this.enabled) return { status: "disabled", rows: [] };
@@ -43,10 +44,10 @@ export class Rank {
 }
 
 // ローカル保存（名前／ベスト）
-export function loadPlayerName() { return localStorage.getItem("playerName") || ""; }
-export function savePlayerName(n) { localStorage.setItem("playerName", String(n || "").slice(0, 16)); }
-export function loadBest() { return Number(localStorage.getItem("bestScore") || "0") | 0; }
-export function saveBest(v) { localStorage.setItem("bestScore", String(v | 0)); }
+export const loadPlayerName = () => localStorage.getItem("playerName") || "";
+export const savePlayerName = (n) => localStorage.setItem("playerName", String(n || "").slice(0, 16));
+export const loadBest = () => Number(localStorage.getItem("bestScore") || "0") | 0;
+export const saveBest = (v) => localStorage.setItem("bestScore", String(v | 0));
 
 // 右上描画
 export async function renderLeaderboard(rank, el) {
