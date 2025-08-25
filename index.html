@@ -33,10 +33,12 @@
   <div class="brand">tamayoke2</div>
 
   <script type="module">
-    // ★毎回更新してキャッシュ破り
-    const V = "diag-20250825-2";
-    window.V = V;
-    import "./js/main.js?v="+encodeURIComponent(V);
-  </script>
+  // ★キャッシュ破り用。毎回変えてください
+  const V = "diag-20250825-3";
+  window.V = V;
+  // main.js ではなく boot.js を読み込み（原因を可視化）
+  import "./js/boot.js?v=" + encodeURIComponent(V);
+</script>
+
 </body>
 </html>
