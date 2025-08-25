@@ -88,5 +88,33 @@
     }
     requestAnimationFrame(loop);
   </script>
+  <script type="module">
+  // ★あなたの GAS /exec
+  const ENDPOINT = "https://script.google.com/macros/s/AKfycbxvQ-miSQfyYy2fEmeNstkb-WiHMtTeuJjl2KzuklxYc1UOeytF6F-O1KX1waNZ8QUO2w/exec";
+
+  const lb = document.getElementById("ui-leaderboard");
+  lb.textContent = "LOADING...";
+
+  (async () => {
+    try {
+      const r = await fetch(ENDPOINT + "?action=top", { cache: "no-store" });
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      const rows = await r.json();
+      const lines = (Array.isArray(rows) ? rows : [])
+        .slice(0, 10)
+        .map((r, i) => {
+          const rank = String(i + 1).padStart(2, "0");
+          const name = String(r.name || "").slice(0, 10).padEnd(10, " ");
+          const score = String(Number(r.score) || 0).padStart(6, " ");
+          return `${rank}. ${name}  ${score}`;
+        });
+      lb.textContent = lines.length ? lines.join("\n") : "まだスコアがありません";
+    } catch (e) {
+      console.error(e);
+      lb.textContent = "通信エラー";
+    }
+  })();
+</script>
+
 </body>
 </html>
