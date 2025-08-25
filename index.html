@@ -16,11 +16,10 @@
       font:14px "Orbitron",monospace;white-space:pre;overflow:auto;
     }
     .brand{position:fixed;left:12px;bottom:12px;font:12px monospace;color:#9cf;}
-    /* 診断用オーバーレイ */
     #diag{
-      position:fixed;left:12px;top:12px;z-index:9;
-      background:rgba(0,0,0,.5);border:1px solid #345;padding:6px 8px;
-      font:12px/1.4 monospace;white-space:pre-wrap;max-width:48vw;max-height:60vh;overflow:auto;
+      position:fixed;left:12px;top:12px;z-index:9;background:rgba(0,0,0,.6);
+      border:1px solid #345;padding:6px 8px;font:12px/1.4 monospace;
+      white-space:pre-wrap;max-width:60vw;max-height:70vh;overflow:auto;
     }
   </style>
 </head>
@@ -32,13 +31,44 @@
   <div id="diag">boot…</div>
   <div class="brand">tamayoke2</div>
 
+  <!-- ★インライン・ブート（どのJSが失敗しているか可視化＆main起動） -->
   <script type="module">
-  // ★キャッシュ破り用。毎回変えてください
-  const V = "diag-20250825-3";
-  window.V = V;
-  // main.js ではなく boot.js を読み込み（原因を可視化）
-  import "./js/boot.js?v=" + encodeURIComponent(V);
-</script>
+    const V = "probe-20250825-4";  // ←キャッシュ破り。更新して保存
+    window.V = V;
 
+    const diag = document.getElementById("diag");
+    const files = [
+      `./js/main.js?v=${encodeURIComponent(V)}`,
+      `./js/rank.js?v=${encodeURIComponent(V)}`,
+      `./js/bullets.js?v=${encodeURIComponent(V)}`,
+      `./js/spawner.js?v=${encodeURIComponent(V)}`
+    ];
+    const log = (s)=> diag.textContent += `\n${s}`;
+
+    async function probe(url){
+      try{
+        const r = await fetch(url, { cache:"no-store" });
+        const ct = r.headers.get("content-type") || "";
+        if(!r.ok){ log(`❌ ${url} -> HTTP ${r.status}`); return; }
+        const txt = await r.text();
+        log(`✅ ${url} -> 200 (${ct}) len=${txt.length}`);
+      }catch(e){
+        log(`❌ ${url} -> ${e.message}`);
+      }
+    }
+
+    // 1) 各JSがHTTP的に読めるかチェック
+    for(const f of files){ /* eslint-disable no-await-in-loop */ await probe(f); }
+
+    // 2) main.js を import（依存でSyntaxError/404があるとここで落ちる）
+    try{
+      await import(`./js/main.js?v=${encodeURIComponent(V)}`);
+      log("🚀 main.js imported. 起動しました。");
+    }catch(e){
+      log("💥 import(main.js) 失敗");
+      log(String(e && (e.stack || e.message || e)));
+      log("→ 上の ❌ を直してください。（ファイル未追加/貼り間違い/構文エラー）");
+    }
+  </script>
 </body>
 </html>
