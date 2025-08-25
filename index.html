@@ -16,11 +16,6 @@
       font:14px "Orbitron",monospace;white-space:pre;overflow:auto;
     }
     .brand{position:fixed;left:12px;bottom:12px;font:12px monospace;color:#9cf;}
-    #diag{
-      position:fixed;left:12px;top:12px;z-index:9;background:rgba(0,0,0,.6);
-      border:1px solid #345;padding:6px 8px;font:12px/1.4 monospace;
-      white-space:pre-wrap;max-width:60vw;max-height:70vh;overflow:auto;
-    }
   </style>
 </head>
 <body>
@@ -28,37 +23,14 @@
     <canvas id="g" width="960" height="540"></canvas>
     <pre id="ui-leaderboard" class="leaderboard">未設定</pre>
   </div>
-  <div id="diag">boot…</div>
   <div class="brand">tamayoke2</div>
 
   <!-- 本番ブート -->
   <script type="module">
-    const V = "rank-20250825-10";         // ★新しい値（キャッシュ破り）
-    window.V = V;                          // ★main.js が参照します
-    import "./js/main.js?v="+encodeURIComponent(V);
-  </script>
+    const V = "rank-20250825-11";  // ←新しい値にする
+    window.V = V;                   // ←★これが重要（main.js が参照）
 
-  <!-- ★可視化：いま読み込まれている endpoint を左上に表示 -->
-  <script type="module">
-    const V = window.V || "dev";
-    const diag = document.getElementById("diag");
-    const lb  = document.getElementById("ui-leaderboard");
-    try {
-      const r = await fetch("./config/game.json?v="+encodeURIComponent(V), { cache:"no-store" });
-      const cfg = await r.json();
-      const ep = cfg?.rankApi?.endpoint?.trim() || "";
-      diag.textContent = [
-        `V=${V}`,
-        `endpoint= ${ep || "(空)"}`,
-        `※ 右上が「未設定」のままなら endpoint が空として読まれています`
-      ].join("\n");
-      if (ep) {
-        // 右上の表示を一時的に「接続確認OK」にしておく（main.js が上書きします）
-        lb.textContent = "接続確認OK（読み込み成功）\n取得できたらTOP10に更新されます";
-      }
-    } catch (e) {
-      diag.textContent = `config 読み込み失敗: ${e}`;
-    }
+    import "./js/main.js?v=" + encodeURIComponent(V);
   </script>
 </body>
 </html>
