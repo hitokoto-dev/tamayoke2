@@ -1,47 +1,15 @@
 {
-  "tuning": {
-    "bulletSpeedScale": 0.7
-  },
-  "spawns": {
-    "rainEvery": 3.8,
-    "sideEvery": 1.8,
-    "ringEvery": 9.0,
-    "kanjiEvery": 5.0,
-    "homingEvery": 4.5
-  },
-  "player": {
-    "size": 36,
-    "hitR": 10,
-    "speed": 240,
-    "slow": 0.5
-  },
-  "zones": {
-    "safeH": 90,
-    "safeCols": 6
-  },
-  "bonusMove": {
-    "cx": 480,
-    "cy": 243,
-    "r": 70,
-    "radius": 48,
-    "speed": 0.6
-  },
+  "tuning": { "bulletSpeedScale": 0.7 },
+  "spawns": { "rainEvery": 3.8, "sideEvery": 1.8, "ringEvery": 9.0, "kanjiEvery": 5.0, "homingEvery": 4.5 },
+  "player": { "size": 36, "hitR": 10, "speed": 240, "slow": 0.5 },
+  "zones": { "safeH": 90, "safeCols": 6 },
+  "bonusMove": { "cx": 480, "cy": 243, "r": 70, "radius": 48, "speed": 0.6 },
   "audio": {
     "crossfadeMs": 400,
     "bgm": {
-      "title": {
-        "src": "assets/audio/title.ogg",
-        "loopStart": 0.0,
-        "loopEnd": 0.0
-      },
-      "play": {
-        "src": "assets/audio/play.ogg",
-        "loopStart": 0.0,
-        "loopEnd": 0.0
-      }
+      "title": { "src": "assets/audio/title.ogg", "loopStart": 0.0, "loopEnd": 0.0 },
+      "play":  { "src": "assets/audio/play.ogg",  "loopStart": 0.0, "loopEnd": 0.0 }
     }
   },
-  "rankApi": {
-    "endpoint": ""
-  }
+  "rankApi": { "endpoint": "" }
 }
