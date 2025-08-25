@@ -30,19 +30,43 @@
 
 <script>
 /* ==========================================================
-   tamayoke2 — 単一ファイル 拡張版（assets/img/ に対応）
-   画像が無くても必ず動作（フォールバック描画）
+   tamayoke2 — 単一ファイル版（assets/img + assets/audio 対応）
+   ・画像/音源が無い場合は自動フォールバック
+   ・画像/音源すべて ?v=… でキャッシュ破り
+   ・BGM: mp3をWebAudioでクロスフェード再生（無ければ内蔵パッド）
+   ・ランキング: GAS /exec 直指定（初回必ず送信）
    ========================================================== */
 
 // ★キャッシュ破り（毎回変えてください）
-const V = "assets-img-20250825-1";
+const V = "assets-img-audio-20250825-2";
 
 // ★あなたの GAS /exec（直指定）
 const RANK_ENDPOINT = "https://script.google.com/macros/s/AKfycbxvQ-miSQfyYy2fEmeNstkb-WiHMtTeuJjl2KzuklxYc1UOeytF6F-O1KX1waNZ8QUO2w/exec";
 
+// 画像パス（実在しなくてもOK：無ければフォールバック）
+const IMG_SRC = {
+  bg:         "assets/img/bg_mechcity_loop.png",
+  zoneSafe:   "assets/img/zone_safe.png",
+  zoneBonus:  "assets/img/zone_bonus.png",
+  player:     "assets/img/player.png",
+  b_normal:   "assets/img/bullet_normal.png",
+  b_fast:     "assets/img/bullet_fast.png",
+  b_homing:   "assets/img/bullet_homing.png",
+  b_big:      "assets/img/bullet_big.png",
+};
+// BGM（実ファイル）
+const BGM_SRC = {
+  title:  "assets/audio/bgm_title.mp3",
+  play:   "assets/audio/bgm_stage1.mp3",
+  result: "assets/audio/bgm_result.mp3",
+};
+
 // ---- 便利ログ（左上） ----
 const blog = document.getElementById("bootlog");
 function bl(msg){ blog.textContent += "\n" + msg; }
+
+// ---- util ----
+const bust = (url)=> url + (url.includes("?")?"&":"?") + "v=" + encodeURIComponent(V);
 
 window.addEventListener("DOMContentLoaded", () => boot().catch(e=>{bl("BOOT ERROR: "+e.message); console.error(e);} ));
 
@@ -57,35 +81,23 @@ async function boot(){
   function fit(){ const s=Math.min(innerWidth/W, innerHeight/H); canvas.style.width=`${(W*s)|0}px`; canvas.style.height=`${(H*s)|0}px`; }
   addEventListener("resize",fit); fit();
 
-  // ---------- 画像ローダ（assets/img/... に対応） ----------
+  // ---------- 画像ローダ（?v= でキャッシュ破り） ----------
   const IMG = new Map();
-  async function loadImage(url){ return new Promise((res,rej)=>{ const i=new Image(); i.onload=()=>res(i); i.onerror=rej; i.src=url; }); }
+  async function loadImage(url){ return new Promise((res,rej)=>{ const i=new Image(); i.onload=()=>res(i); i.onerror=rej; i.src=bust(url); }); }
   async function tryLoad(key,url){ try{ const img=await loadImage(url); IMG.set(key,img); bl("img ok: "+url); }catch{ bl("img miss: "+url); } }
-  await Promise.all([
-    // 背景＆ゾーン
-    tryLoad("bg","assets/img/bg_mechcity_loop.png"),
-    tryLoad("zoneSafe","assets/img/zone_safe.png"),
-    tryLoad("zoneBonus","assets/img/zone_bonus.png"),
-    // 自機
-    tryLoad("player","assets/img/player.png"),
-    // 弾
-    tryLoad("b_normal","assets/img/bullet_normal.png"),
-    tryLoad("b_fast","assets/img/bullet_fast.png"),
-    tryLoad("b_homing","assets/img/bullet_homing.png"),
-    tryLoad("b_big","assets/img/bullet_big.png"),
-  ]);
+  await Promise.all(Object.entries(IMG_SRC).map(([k,u])=>tryLoad(k,u)));
 
   // ---------- ランキング ----------
   const elLB = document.getElementById("ui-leaderboard");
   class Rank {
     constructor(endpoint){ this.endpoint=String(endpoint||"").trim(); this.enabled=!!this.endpoint; }
     async top(){ if(!this.enabled) return {status:"disabled",rows:[]};
-      const r=await fetch(this.endpoint+"?action=top",{cache:"no-store"}); if(!r.ok) throw new Error("HTTP "+r.status);
+      const r=await fetch(bust(this.endpoint+"?action=top"),{cache:"no-store"}); if(!r.ok) throw new Error("HTTP "+r.status);
       const arr=await r.json(); return {status:"ok",rows:Array.isArray(arr)?arr:[]}; }
     async submit(name, score){
       if(!this.enabled) return {status:"disabled"};
       const body=new URLSearchParams({name:String(name||"YOU").slice(0,16),score:String(Math.max(0,score|0)),_ua:navigator.userAgent.slice(0,64)});
-      const r=await fetch(this.endpoint,{method:"POST",body}); if(!r.ok) return {status:"error",error:"HTTP "+r.status};
+      const r=await fetch(bust(this.endpoint),{method:"POST",body}); if(!r.ok) return {status:"error",error:"HTTP "+r.status};
       const d=await r.json().catch(()=>({})); return d&&d.ok?{status:"ok"}:{status:"error",error:d?.error||"unknown"};
     }
   }
@@ -108,78 +120,84 @@ async function boot(){
   }
   if(rank.enabled){ bl("endpoint="+rank.endpoint); await renderLeaderboard(); } else { bl("endpoint=(empty) → 未設定"); }
 
-  // ---------- ローカル保存 ----------
-  const loadPlayerName = () => localStorage.getItem("playerName") || "";
-  const savePlayerName = n => localStorage.setItem("playerName", String(n||"").slice(0,16));
-  const loadBest = () => Number(localStorage.getItem("bestScore")||"0")|0;
-  const saveBest = v => localStorage.setItem("bestScore", String(v|0));
-
-  // ---------- 入力 ----------
-  const keys=new Set(); let pointerDown=false, pointerX=W/2, pointerY=H*0.75;
-  addEventListener("keydown",e=>{ if(!e.repeat) keys.add(e.key);
-    if(["ArrowUp","ArrowDown","ArrowLeft","ArrowRight"," "].includes(e.key)) e.preventDefault();
-  });
-  addEventListener("keyup",e=>keys.delete(e.key));
-  function cpos(e){ const r=canvas.getBoundingClientRect(); return {x:(e.clientX-r.left)*W/r.width, y:(e.clientY-r.top)*H/r.height}; }
-  canvas.addEventListener("pointerdown",e=>{ pointerDown=true; const p=cpos(e); pointerX=p.x; pointerY=p.y; unlockAudio(); });
-  addEventListener("pointerup",()=> pointerDown=false);
-  canvas.addEventListener("pointermove",e=>{ if(!pointerDown) return; const p=cpos(e); pointerX=p.x; pointerY=p.y; });
-
-  // ---------- オーディオ（BGM/SE 内製） ----------
+  // ---------- Audio ----------
   let AC=null, master=null, unlocked=false;
   function makeAC(){ AC=new (window.AudioContext||window.webkitAudioContext)(); master=AC.createGain(); master.connect(AC.destination); master.gain.value=0.9; }
   async function unlockAudio(){ if(unlocked) return; if(!AC) makeAC(); try{ await AC.resume(); unlocked=(AC.state==="running"); }catch{} }
 
-  // タイトル/プレイの簡易パッド
-  const pads = {
-    title: { osc:null, gain:null, f: 220, lfoF:0.2 },
-    play : { osc:null, gain:null, f: 330, lfoF:0.4 }
-  };
+  // BGMデコーダ
+  const ABUF = new Map();
+  async function decodeAudio(key, url){
+    try{
+      if(!AC) makeAC();
+      const r = await fetch(bust(url)); const array = await r.arrayBuffer();
+      const buf = await AC.decodeAudioData(array);
+      ABUF.set(key, buf); bl("bgm ok: "+url);
+    }catch(e){ bl("bgm miss: "+url); }
+  }
+  // 先にデコード試行（失敗してもフォールバック有）
+  await Promise.all(Object.entries(BGM_SRC).map(([k,u])=>decodeAudio(k,u)));
+
+  // BGMプレイヤ（2chクロスフェード）
+  class BGM {
+    constructor(){
+      this.g1=AC.createGain(); this.g2=AC.createGain(); this.g1.connect(master); this.g2.connect(master);
+      this.s1=null; this.s2=null; this.cur=""; this.which=0;
+      this.g1.gain.value=0; this.g2.gain.value=0;
+    }
+    _startOn(g,buf){
+      const s=AC.createBufferSource(); s.buffer=buf; s.loop=true; s.connect(g);
+      s.start(); return s;
+    }
+    play(name, ms=400){
+      const buf=ABUF.get(name);
+      if(!buf){ // フォールバック：内蔵パッド
+        padCrossTo(name==="play"?"play":"title", ms);
+        this.cur=name; return;
+      }
+      padStop("title"); padStop("play");
+      const now=AC.currentTime, dur=Math.max(0.01, ms/1000);
+      if(this.which===0){
+        if(this.s2){ try{this.s2.stop();}catch{} this.s2=null; }
+        if(!this.s1) this.s1=this._startOn(this.g1,buf); else { try{this.s1.stop();}catch{} this.s1=this._startOn(this.g1,buf); }
+        this.g1.gain.setValueAtTime(this.g1.gain.value, now);
+        this.g1.gain.linearRampToValueAtTime(0.6, now+dur);
+        this.g2.gain.setValueAtTime(this.g2.gain.value, now);
+        this.g2.gain.linearRampToValueAtTime(0.0, now+dur);
+        this.which=1;
+      }else{
+        if(this.s1){ try{this.s1.stop();}catch{} this.s1=null; }
+        if(!this.s2) this.s2=this._startOn(this.g2,buf); else { try{this.s2.stop();}catch{} this.s2=this._startOn(this.g2,buf); }
+        this.g2.gain.setValueAtTime(this.g2.gain.value, now);
+        this.g2.gain.linearRampToValueAtTime(0.6, now+dur);
+        this.g1.gain.setValueAtTime(this.g1.gain.value, now);
+        this.g1.gain.linearRampToValueAtTime(0.0, now+dur);
+        this.which=0;
+      }
+      this.cur=name;
+    }
+    stop(){ try{this.s1?.stop();}catch{} try{this.s2?.stop();}catch{} this.s1=this.s2=null; this.g1.gain.value=this.g2.gain.value=0; }
+  }
+
+  // パッドBGM（フォールバック）
+  const pads = { title:{osc:null,gain:null,f:220,lfoF:0.2}, play:{osc:null,gain:null,f:330,lfoF:0.4} };
   function padStart(which){
-    if(!AC) return;
-    const p = pads[which]; if(!p || p.osc) return;
-    const o = AC.createOscillator(); o.type="sawtooth"; o.frequency.value=p.f;
-    const g = AC.createGain(); g.gain.value=0;
-    const lfo=AC.createOscillator(); const lfoGain=AC.createGain();
-    lfo.frequency.value=p.lfoF; lfoGain.gain.value=30; lfo.connect(lfoGain).connect(o.frequency);
-    o.connect(g).connect(master); o.start(); lfo.start();
-    p.osc=o; p.gain=g; p._lfo=lfo; p._lfoG=lfoGain;
+    if(!AC) return; const p=pads[which]; if(!p||p.osc) return;
+    const o=AC.createOscillator(); o.type="sawtooth"; o.frequency.value=p.f;
+    const g=AC.createGain(); g.gain.value=0;
+    const lfo=AC.createOscillator(); const lfoG=AC.createGain(); lfo.frequency.value=p.lfoF; lfoG.gain.value=30; lfo.connect(lfoG).connect(o.frequency);
+    o.connect(g).connect(master); o.start(); lfo.start(); p.osc=o; p.gain=g; p._lfo=lfo; p._lfoG=lfoG;
   }
-  function padStop(which){
-    const p=pads[which]; if(!p||!p.osc) return;
-    try{ p.osc.stop(); p._lfo.stop(); }catch{}
-    p.osc.disconnect(); p._lfo.disconnect(); p._lfoG.disconnect(); p.gain.disconnect();
-    p.osc=p.gain=p._lfo=p._lfoG=null;
-  }
-  function padCrossTo(which, ms=400){
-    if(!AC) return;
-    const now=AC.currentTime, dur=Math.max(0.01, ms/1000);
-    Object.keys(pads).forEach(k=>{
-      const p=pads[k];
-      if(!p.osc && k!==which) return;
-      padStart(k);
-      const tgt = (k===which) ? 0.5 : 0.0;
-      p.gain.gain.setValueAtTime(p.gain.gain.value, now);
-      p.gain.gain.linearRampToValueAtTime(tgt, now+dur);
-      if(k!==which) setTimeout(()=>padStop(k), ms+60);
-    });
+  function padStop(which){ const p=pads[which]; if(!p||!p.osc) return; try{p.osc.stop();p._lfo.stop();}catch{} p.osc.disconnect();p.gain.disconnect();p._lfo.disconnect();p._lfoG.disconnect(); p.osc=p.gain=p._lfo=p._lfoG=null; }
+  function padCrossTo(which,ms=400){
+    if(!AC) return; const now=AC.currentTime, dur=Math.max(0.01,ms/1000);
+    for(const k of Object.keys(pads)){ const p=pads[k]; padStart(k); const tgt=(k===which)?0.5:0.0; p.gain.gain.setValueAtTime(p.gain.gain.value,now); p.gain.gain.linearRampToValueAtTime(tgt,now+dur); if(k!==which) setTimeout(()=>padStop(k),ms+60); }
   }
   // 効果音
-  function beep(hz=880, ms=120, vol=0.25){
-    if(!AC) return;
-    const o=AC.createOscillator(); o.type="square"; o.frequency.value=hz;
-    const g=AC.createGain(); g.gain.value=vol; o.connect(g).connect(master); o.start();
-    const now=AC.currentTime; g.gain.setValueAtTime(vol, now); g.gain.linearRampToValueAtTime(0, now+ms/1000);
-    setTimeout(()=>{ try{o.stop();}catch{} }, ms+20);
-  }
-  function thud(){
-    if(!AC) return;
-    const o=AC.createOscillator(); o.type="triangle"; const g=AC.createGain();
-    o.connect(g).connect(master); const now=AC.currentTime;
-    o.frequency.setValueAtTime(200,now); o.frequency.exponentialRampToValueAtTime(60, now+0.2);
-    g.gain.setValueAtTime(0.5, now); g.gain.exponentialRampToValueAtTime(0.001, now+0.25);
-    o.start(); setTimeout(()=>{ try{o.stop();}catch{} }, 260);
-  }
+  function beep(hz=880,ms=120,vol=0.25){ if(!AC) return; const o=AC.createOscillator(); o.type="square"; o.frequency.value=hz; const g=AC.createGain(); g.gain.value=vol; o.connect(g).connect(master); o.start(); const now=AC.currentTime; g.gain.setValueAtTime(vol,now); g.gain.linearRampToValueAtTime(0,now+ms/1000); setTimeout(()=>{try{o.stop()}catch{}},ms+20); }
+  function thud(){ if(!AC) return; const o=AC.createOscillator(); o.type="triangle"; const g=AC.createGain(); o.connect(g).connect(master); const now=AC.currentTime; o.frequency.setValueAtTime(200,now); o.frequency.exponentialRampToValueAtTime(60,now+0.2); g.gain.setValueAtTime(0.5,now); g.gain.exponentialRampToValueAtTime(0.001,now+0.25); o.start(); setTimeout(()=>{try{o.stop()}catch{}},260); }
+
+  const bgm = new Proxy(new BGM(), {get:(t,p)=>t[p]});
 
   // ---------- ゾーン ----------
   const SAFE_H = 90; // 下部セーフ高さ
@@ -188,41 +206,26 @@ async function boot(){
   function drawZones(t){
     // セーフ
     const texSafe=IMG.get("zoneSafe");
-    if(texSafe){
-      const y=H-SAFE_H; ctx.globalAlpha=0.9; ctx.drawImage(texSafe,0,y,W,SAFE_H); ctx.globalAlpha=1;
-    }else{
-      ctx.fillStyle="rgba(20,200,120,0.10)"; ctx.fillRect(0, H-SAFE_H, W, SAFE_H);
-    }
-    // ボーナス（移動円）
+    if(texSafe){ const y=H-SAFE_H; ctx.globalAlpha=0.9; ctx.drawImage(texSafe,0,y,W,SAFE_H); ctx.globalAlpha=1; }
+    else { ctx.fillStyle="rgba(20,200,120,0.10)"; ctx.fillRect(0,H-SAFE_H,W,SAFE_H); }
+    // ボーナス
     const ang=t*bonus.speed, bx=bonus.cx+Math.cos(ang)*bonus.rOrbit, by=bonus.cy+Math.sin(ang)*bonus.rOrbit;
     const texB=IMG.get("zoneBonus");
-    if(texB){
-      ctx.save(); ctx.translate(bx,by);
-      ctx.globalAlpha=0.9; ctx.drawImage(texB, -bonus.radius, -bonus.radius, bonus.radius*2, bonus.radius*2); ctx.globalAlpha=1;
-      ctx.restore();
-      ctx.strokeStyle="rgba(250,210,60,0.25)"; ctx.beginPath(); ctx.arc(bonus.cx,bonus.cy,bonus.rOrbit,0,Math.PI*2); ctx.stroke();
-    }else{
-      ctx.fillStyle="rgba(250,210,60,0.12)";
-      ctx.beginPath(); ctx.arc(bx,by,bonus.radius,0,Math.PI*2); ctx.fill();
-      ctx.strokeStyle="rgba(250,210,60,0.25)"; ctx.beginPath(); ctx.arc(bonus.cx,bonus.cy,bonus.rOrbit,0,Math.PI*2); ctx.stroke();
-    }
+    if(texB){ ctx.save(); ctx.translate(bx,by); ctx.globalAlpha=0.9; ctx.drawImage(texB,-bonus.radius,-bonus.radius,bonus.radius*2,bonus.radius*2); ctx.globalAlpha=1; ctx.restore(); ctx.strokeStyle="rgba(250,210,60,0.25)"; ctx.beginPath(); ctx.arc(bonus.cx,bonus.cy,bonus.rOrbit,0,Math.PI*2); ctx.stroke(); }
+    else { ctx.fillStyle="rgba(250,210,60,0.12)"; ctx.beginPath(); ctx.arc(bx,by,bonus.radius,0,Math.PI*2); ctx.fill(); ctx.strokeStyle="rgba(250,210,60,0.25)"; ctx.beginPath(); ctx.arc(bonus.cx,bonus.cy,bonus.rOrbit,0,Math.PI*2); ctx.stroke(); }
     return {bx,by};
   }
   function inCircle(px,py,cx,cy,r){ const dx=px-cx, dy=py-cy; return dx*dx+dy*dy <= r*r; }
 
-  // ---------- 背景（テクスチャがあればループ、無ければ星空） ----------
+  // ---------- 背景 ----------
   const stars = [{n:60, sp:10, pts:[]},{n:40, sp:20, pts:[]},{n:20, sp:35, pts:[]},];
   for(const layer of stars){ for(let i=0;i<layer.n;i++) layer.pts.push({x:Math.random()*W, y:Math.random()*H}); }
   function drawBG(t){
     const bg=IMG.get("bg");
-    if(bg){
-      const y=(t*40)%H;
-      ctx.drawImage(bg,0,y-H,W,H); ctx.drawImage(bg,0,y,W,H);
-    }else{
-      const g=ctx.createLinearGradient(0,0,0,H); g.addColorStop(0,"#0b1020"); g.addColorStop(1,"#0f1830");
-      ctx.fillStyle=g; ctx.fillRect(0,0,W,H);
-      ctx.fillStyle="rgba(255,255,255,0.6)";
-      for(const layer of stars){ for(const p of layer.pts){ p.y += layer.sp*0.016; if(p.y>H) p.y-=H; ctx.fillRect(p.x, p.y, 1.2, 1.2);} }
+    if(bg){ const y=(t*40)%H; ctx.drawImage(bg,0,y-H,W,H); ctx.drawImage(bg,0,y,W,H); }
+    else {
+      const g=ctx.createLinearGradient(0,0,0,H); g.addColorStop(0,"#0b1020"); g.addColorStop(1,"#0f1830"); ctx.fillStyle=g; ctx.fillRect(0,0,W,H);
+      ctx.fillStyle="rgba(255,255,255,0.6)"; for(const layer of stars){ for(const p of layer.pts){ p.y += layer.sp*0.016; if(p.y>H) p.y-=H; ctx.fillRect(p.x, p.y, 1.2, 1.2);} }
     }
   }
 
@@ -238,36 +241,18 @@ async function boot(){
   function spawn(dt){
     timers.rain+=dt; timers.side+=dt; timers.ring+=dt; timers.homing+=dt; timers.kanji+=dt;
 
-    // 雨（白）
-    if(timers.rain>=0.15){ timers.rain=0;
-      const x=20+Math.random()*(W-40);
-      bullets.push({kind:"normal",x,y:-10,vx:0,vy:140+Math.random()*50,r:6,alive:true});
-    }
-    // 横（赤：fast）
-    if(timers.side>=1.1){ timers.side=0;
-      const L=Math.random()<0.5, y0=60+Math.random()*(H-220);
-      for(let i=0;i<7;i++){
-        bullets.push({kind:"fast",x:L?-10:W+10,y:y0+i*9,vx:L?160:-160,vy:(Math.random()*2-1)*22,r:5,alive:true});
-      }
-    }
-    // リング（白）
-    if(timers.ring>=2.4){ timers.ring=0;
-      const cx=80+Math.random()*(W-160), cy=80+Math.random()*(H-220), n=24, spd=135;
-      for(let i=0;i<n;i++){ const a=i/n*Math.PI*2; bullets.push({kind:"normal",x:cx,y:cy,vx:Math.cos(a)*spd,vy:Math.sin(a)*spd,r:6,alive:true}); }
-    }
-    // 誘導（青）
-    if(timers.homing>=3.6){ timers.homing=0;
-      const edge=(Math.random()*4)|0; let x=0,y=0;
-      if(edge===0){x=Math.random()*W;y=-10;} if(edge===1){x=W+10;y=Math.random()*H;}
-      if(edge===2){x=Math.random()*W;y=H+10;} if(edge===3){x=-10;y=Math.random()*H;}
+    if(timers.rain>=0.15){ timers.rain=0; const x=20+Math.random()*(W-40);
+      bullets.push({kind:"normal",x,y:-10,vx:0,vy:140+Math.random()*50,r:6,alive:true}); }
+    if(timers.side>=1.1){ timers.side=0; const L=Math.random()<0.5, y0=60+Math.random()*(H-220);
+      for(let i=0;i<7;i++) bullets.push({kind:"fast",x:L?-10:W+10,y:y0+i*9,vx:L?160:-160,vy:(Math.random()*2-1)*22,r:5,alive:true}); }
+    if(timers.ring>=2.4){ timers.ring=0; const cx=80+Math.random()*(W-160), cy=80+Math.random()*(H-220), n=24, spd=135;
+      for(let i=0;i<n;i++){ const a=i/n*Math.PI*2; bullets.push({kind:"normal",x:cx,y:cy,vx:Math.cos(a)*spd,vy:Math.sin(a)*spd,r:6,alive:true}); } }
+    if(timers.homing>=3.6){ timers.homing=0; const edge=(Math.random()*4)|0; let x=0,y=0;
+      if(edge===0){x=Math.random()*W;y=-10;} if(edge===1){x=W+10;y=Math.random()*H;} if(edge===2){x=Math.random()*W;y=H+10;} if(edge===3){x=-10;y=Math.random()*H;}
       const ang=Math.atan2(player.y-y, player.x-x), v=145;
-      bullets.push({kind:"homing",x,y,vx:Math.cos(ang)*v,vy:Math.sin(ang)*v,turnDeg:120,r:6,alive:true,homing:true});
-    }
-    // 巨大（漢字風）弾
-    if(timers.kanji>=5.0){ timers.kanji=0;
-      const x=40+Math.random()*(W-80);
-      bullets.push({kind:"big",x,y:-30,vx:0,vy:95,turnDeg:60,r:24,alive:true,text:randomKanji()});
-    }
+      bullets.push({kind:"homing",x,y,vx:Math.cos(ang)*v,vy:Math.sin(ang)*v,turnDeg:120,r:6,alive:true,homing:true}); }
+    if(timers.kanji>=5.0){ timers.kanji=0; const x=40+Math.random()*(W-80);
+      bullets.push({kind:"big",x,y:-30,vx:0,vy:95,turnDeg:60,r:24,alive:true,text:randomKanji()}); }
   }
 
   function update(dt){
@@ -285,49 +270,36 @@ async function boot(){
     // 弾
     spawn(dt);
     for(const b of bullets){
-      if(b.homing){
-        const angTo=Math.atan2(player.y-b.y, player.x-b.x);
-        const cur=Math.atan2(b.vy,b.vx);
-        const max=(b.turnDeg*Math.PI/180)*dt;
-        let diff=angTo-cur; while(diff>Math.PI) diff-=Math.PI*2; while(diff<-Math.PI) diff+=Math.PI*2;
-        diff=Math.max(-max,Math.min(max,diff));
-        const next=cur+diff; const sp=Math.hypot(b.vx,b.vy)||145;
-        b.vx=Math.cos(next)*sp; b.vy=Math.sin(next)*sp;
-      } else if (b.kind==="big"){
-        // 緩やか追尾
-        const angTo=Math.atan2(player.y-b.y, player.x-b.x);
-        const cur=Math.atan2(b.vy,b.vx);
-        const max=(b.turnDeg*Math.PI/180)*dt;
-        let diff=angTo-cur; while(diff>Math.PI) diff-=Math.PI*2; while(diff<-Math.PI) diff+=Math.PI*2;
-        diff=Math.max(-max,Math.min(max,diff));
-        const next=cur+diff; const sp=Math.hypot(b.vx,b.vy)||110;
-        b.vx=Math.cos(next)*sp; b.vy=Math.sin(next)*sp;
-      }
-      b.x+=b.vx*dt; b.y+=b.vy*dt;
-      if(b.x<-80||b.x>W+80||b.y<-80||b.y>H+80) b.alive=false;
+      if(b.homing){ const angTo=Math.atan2(player.y-b.y, player.x-b.x); const cur=Math.atan2(b.vy,b.vx);
+        const max=(b.turnDeg*Math.PI/180)*dt; let diff=angTo-cur; while(diff>Math.PI) diff-=Math.PI*2; while(diff<-Math.PI) diff+=Math.PI*2;
+        diff=Math.max(-max,Math.min(max,diff)); const next=cur+diff; const sp=Math.hypot(b.vx,b.vy)||145; b.vx=Math.cos(next)*sp; b.vy=Math.sin(next)*sp; }
+      else if(b.kind==="big"){ const angTo=Math.atan2(player.y-b.y, player.x-b.x); const cur=Math.atan2(b.vy,b.vx);
+        const max=(b.turnDeg*Math.PI/180)*dt; let diff=angTo-cur; while(diff>Math.PI) diff-=Math.PI*2; while(diff<-Math.PI) diff+=Math.PI*2;
+        diff=Math.max(-max,Math.min(max,diff)); const next=cur+diff; const sp=Math.hypot(b.vx,b.vy)||110; b.vx=Math.cos(next)*sp; b.vy=Math.sin(next)*sp; }
+      b.x+=b.vx*dt; b.y+=b.vy*dt; if(b.x<-80||b.x>W+80||b.y<-80||b.y>H+80) b.alive=false;
     }
     bullets=bullets.filter(b=>b.alive);
 
     // 当たり
-    for(const b of bullets){
-      const rr=(b.r+player.hitR), dx=b.x-player.x, dy=b.y-player.y;
-      if(dx*dx+dy*dy<=rr*rr) return true;
-    }
+    for(const b of bullets){ const rr=(b.r+player.hitR), dx=b.x-player.x, dy=b.y-player.y; if(dx*dx+dy*dy<=rr*rr) return true; }
     return false;
   }
 
+  // ---------- 入力 ----------
+  const keys=new Set(); let pointerDown=false, pointerX=W/2, pointerY=H*0.75;
+  addEventListener("keydown",e=>{ if(!e.repeat) keys.add(e.key); if(["ArrowUp","ArrowDown","ArrowLeft","ArrowRight"," "].includes(e.key)) e.preventDefault(); });
+  addEventListener("keyup",e=>keys.delete(e.key));
+  function cpos(e){ const r=canvas.getBoundingClientRect(); return {x:(e.clientX-r.left)*W/r.width, y:(e.clientY-r.top)*H/r.height}; }
+  canvas.addEventListener("pointerdown",e=>{ pointerDown=true; const p=cpos(e); pointerX=p.x; pointerY=p.y; unlockAudio(); });
+  addEventListener("pointerup",()=> pointerDown=false);
+  canvas.addEventListener("pointermove",e=>{ if(!pointerDown) return; const p=cpos(e); pointerX=p.x; pointerY=p.y; });
+
   // ---------- 描画 ----------
   function drawPlayer(){
-    const img=IMG.get("player");
-    const ang=Math.atan2(player.vy, player.vx)||0;
-    ctx.save(); ctx.translate(player.x,player.y); ctx.rotate(ang);
-    const s=player.size;
+    const img=IMG.get("player"); const ang=Math.atan2(player.vy, player.vx)||0;
+    ctx.save(); ctx.translate(player.x,player.y); ctx.rotate(ang); const s=player.size;
     if(img){ ctx.drawImage(img, -s, -s, s*2, s*2); }
-    else {
-      ctx.shadowColor="rgba(80,200,255,0.6)"; ctx.shadowBlur=20;
-      ctx.fillStyle="#4cf"; ctx.beginPath(); ctx.moveTo(0,-s); ctx.lineTo(s*0.7,0); ctx.lineTo(0,s); ctx.lineTo(-s*0.7,0); ctx.closePath(); ctx.fill();
-      ctx.shadowBlur=0; ctx.strokeStyle="rgba(255,255,255,0.35)"; ctx.beginPath(); ctx.arc(0,0,player.hitR,0,Math.PI*2); ctx.stroke();
-    }
+    else { ctx.shadowColor="rgba(80,200,255,0.6)"; ctx.shadowBlur=20; ctx.fillStyle="#4cf"; ctx.beginPath(); ctx.moveTo(0,-s); ctx.lineTo(s*0.7,0); ctx.lineTo(0,s); ctx.lineTo(-s*0.7,0); ctx.closePath(); ctx.fill(); ctx.shadowBlur=0; ctx.strokeStyle="rgba(255,255,255,0.35)"; ctx.beginPath(); ctx.arc(0,0,player.hitR,0,Math.PI*2); ctx.stroke(); }
     ctx.restore();
   }
   function drawBullets(){
@@ -336,8 +308,7 @@ async function boot(){
       else if(b.kind==="fast"){ const sp=IMG.get("b_fast"); if(sp) ctx.drawImage(sp,b.x-b.r,b.y-b.r,b.r*2,b.r*2); else { ctx.fillStyle="#f55"; ctx.beginPath(); ctx.arc(b.x,b.y,b.r,0,Math.PI*2); ctx.fill(); } }
       else if(b.kind==="homing"){ const sp=IMG.get("b_homing"); if(sp) ctx.drawImage(sp,b.x-b.r,b.y-b.r,b.r*2,b.r*2); else { ctx.fillStyle="#6cf"; ctx.beginPath(); ctx.arc(b.x,b.y,b.r,0,Math.PI*2); ctx.fill(); } }
       else if(b.kind==="big"){
-        const sp=IMG.get("b_big");
-        ctx.save(); ctx.translate(b.x,b.y);
+        const sp=IMG.get("b_big"); ctx.save(); ctx.translate(b.x,b.y);
         ctx.fillStyle="rgba(255,255,255,0.12)"; ctx.beginPath(); ctx.arc(0,0,b.r,0,Math.PI*2); ctx.fill();
         if(sp) ctx.drawImage(sp, -b.r, -b.r, b.r*2, b.r*2);
         ctx.fillStyle="#fff"; ctx.textAlign="center"; ctx.textBaseline="middle"; ctx.font="bold 20px Noto Sans JP, sans-serif"; ctx.fillText(b.text||"炎",0,2);
@@ -346,15 +317,16 @@ async function boot(){
       }
     }
   }
-  function drawTitle(){ ctx.fillStyle="#fff"; ctx.textAlign="center"; ctx.textBaseline="middle";
-    ctx.font="64px Orbitron, sans-serif"; ctx.fillText("TAMAYOKE 2", W/2, H*0.33);
-    ctx.font="18px Noto Sans JP, sans-serif"; ctx.fillText("クリック／Enter でスタート", W/2, H*0.33+56);
-  }
+  function drawTitle(){ ctx.fillStyle="#fff"; ctx.textAlign="center"; ctx.textBaseline="middle"; ctx.font="64px Orbitron, sans-serif"; ctx.fillText("TAMAYOKE 2", W/2, H*0.33); ctx.font="18px Noto Sans JP, sans-serif"; ctx.fillText("クリック／Enter でスタート", W/2, H*0.33+56); }
   function drawGameOver(){ ctx.font="46px Orbitron, sans-serif"; ctx.textAlign="center"; ctx.textBaseline="middle"; ctx.fillStyle="#ff9"; ctx.fillText("GAME OVER", W/2, H*0.35); ctx.font="18px Noto Sans JP, sans-serif"; ctx.fillStyle="#fff"; ctx.fillText("0.7秒後に クリック／Enter でタイトルへ", W/2, H*0.35+50); }
   function drawScore(){ const s=String(score|0).padStart(6,"0"); ctx.font="20px Orbitron, monospace"; ctx.textAlign="right"; ctx.textBaseline="top"; ctx.fillStyle="#fff"; ctx.fillText(`SCORE  ${s}`, W-16, 12); }
 
   // ---------- 送信（初回必ず・以降ベスト時） ----------
   const SUBMITTED_KEY="rankSubmittedOnce";
+  const loadPlayerName = () => localStorage.getItem("playerName") || "";
+  const savePlayerName = n => localStorage.setItem("playerName", String(n||"").slice(0,16));
+  const loadBest = () => Number(localStorage.getItem("bestScore")||"0")|0;
+  const saveBest = v => localStorage.setItem("bestScore", String(v|0));
   async function submitScore(finalScore){
     if(!rank.enabled) return;
     const already = localStorage.getItem(SUBMITTED_KEY)==="1";
@@ -363,10 +335,7 @@ async function boot(){
     const isBest = (finalScore|0) > best;
     if(!mustSubmit && !isBest) return;
     if(isBest) saveBest(finalScore|0);
-
-    let name = loadPlayerName();
-    if(!name){ name=(prompt("名前（16文字まで）を入力してください","YOU")||"YOU").trim().slice(0,16); savePlayerName(name); }
-
+    let name = loadPlayerName(); if(!name){ name=(prompt("名前（16文字まで）を入力してください","YOU")||"YOU").trim().slice(0,16); savePlayerName(name); }
     const prev=elLB.textContent; elLB.textContent="SUBMITTING...";
     const res=await rank.submit(name, finalScore|0);
     if(res.status==="ok"){ localStorage.setItem(SUBMITTED_KEY,"1"); await renderLeaderboard(); beep(1320,120,0.35); }
@@ -376,30 +345,33 @@ async function boot(){
   // ---------- ループ ----------
   let prev=performance.now(), tAccum=0;
   bl("title ready");
+
+  // 初期BGM（タイトル）
+  if(!AC) makeAC();
+  if(ABUF.size){ bgm.play("title", 400); } else { padCrossTo("title", 400); }
+
   requestAnimationFrame(function loop(ts){
     const dt=Math.min(1/20, Math.max(0,(ts-prev)/1000)); prev=ts; tAccum+=dt;
 
+    // 背景→ゾーン
     drawBG(tAccum);
     const {bx,by}=drawZones(tAccum);
 
     if(state===TITLE){
       drawTitle();
-      if(keys.has("Enter")||pointerDown){ pointerDown=false; state=PLAY; timePlay=0; score=0; bullets.length=0; padCrossTo("play"); }
+      if(keys.has("Enter")||pointerDown){ pointerDown=false; state=PLAY; timePlay=0; score=0; bullets.length=0; unlockAudio(); if(ABUF.size){ bgm.play("play", 400); } else { padCrossTo("play", 400); } }
     }else if(state===PLAY){
       timePlay+=dt; const bonusOn = inCircle(player.x,player.y,bx,by,bonus.radius);
       score += (bonusOn?4:1)*10*dt;
-      if(update(dt)){ const fs=score|0; thud(); submitScore(fs).catch(()=>{}); state=OVER; allowReturnAt=performance.now()+700; bullets.length=0; padCrossTo("title"); }
+      if(update(dt)){ const fs=score|0; thud(); submitScore(fs).catch(()=>{}); state=OVER; allowReturnAt=performance.now()+700; bullets.length=0; if(ABUF.size){ bgm.play("result", 400);} else { padCrossTo("title", 400);} }
       drawBullets(); drawPlayer(); drawScore();
     }else{ // OVER
       drawBullets(); drawGameOver(); drawScore();
-      if(performance.now()>=allowReturnAt && (keys.has("Enter")||pointerDown)){ pointerDown=false; state=TITLE; timePlay=0; }
+      if(performance.now()>=allowReturnAt && (keys.has("Enter")||pointerDown)){ pointerDown=false; state=TITLE; timePlay=0; if(ABUF.size){ bgm.play("title", 400); } else { padCrossTo("title", 400);} }
     }
 
     requestAnimationFrame(loop);
   });
-
-  // 初期BGM（タイトル）
-  padCrossTo("title");
 }
 </script>
 </body>
