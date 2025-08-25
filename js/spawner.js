@@ -1,12 +1,11 @@
 // spawner.js
-import { NormalBullet, FastBullet, HomingBullet, KanjiBullet } from "./bullets.js";
+// bullets.js をここでは import しない！ main から渡してもらう（依存注入）
 
 export class Spawner {
-  constructor(config) {
+  constructor(config, bulletsLib) {
     this.c = config;
-    this.t = {
-      row: 0, sine: 0, rain: 0, side: 0, fan: 0, ring: 0, kanji: 0, homing: 0
-    };
+    this.B = bulletsLib; // { NormalBullet, FastBullet, HomingBullet, KanjiBullet }
+    this.t = { row: 0, sine: 0, rain: 0, side: 0, fan: 0, ring: 0, kanji: 0, homing: 0 };
     this.paused = false;
     this.active = true;
   }
@@ -26,12 +25,16 @@ export class Spawner {
     const speedMul = Math.min(1 + diff * 0.5, dcfg.caps?.speedMul ?? 2.0);
     const countMul = Math.min(1 + diff * 0.35, dcfg.caps?.countMul ?? 1.6);
 
-    // 共通
     const W = this.c.logicSize.w, H = this.c.logicSize.h;
-    const baseSpeed = 160 * (this.c.tuning?.bulletSpeedScale ?? 1); // 白い球は0.7倍（config）
-    const fastSpeed = 260 * speedMul;          // 赤：速い
-    const homingSpeed = 140 * speedMul;        // 青：誘導
-    const kanjiSpeed = 120 * speedMul;         // 巨大漢字弾
+
+    // 速度（白い球は全体0.7倍にしてから難易度倍率）
+    const baseSpeed   = 160 * (this.c.tuning?.bulletSpeedScale ?? 1) * speedMul;
+    const fastSpeed   = 260 * speedMul;   // 赤
+    const homingSpeed = 140 * speedMul;   // 青
+    const kanjiSpeed  = 120 * speedMul;   // 巨大
+
+    // 依存（弾クラス）
+    const { NormalBullet, FastBullet, HomingBullet, KanjiBullet } = this.B;
 
     // タイマ進行
     for (const k of Object.keys(this.t)) this.t[k] += dt;
@@ -43,8 +46,7 @@ export class Spawner {
       for (let i = 0; i < n; i++) {
         const x = 20 + Math.random() * (W - 40);
         const y = -20 - Math.random() * 30;
-        const vx = 0, vy = (baseSpeed + Math.random() * 40) * speedMul;
-        bullets.push(new NormalBullet(x, y, vx, vy, this.c.bullets.hitR));
+        bullets.push(new NormalBullet(x, y, 0, (baseSpeed + Math.random() * 40)));
       }
     }
 
@@ -55,9 +57,9 @@ export class Spawner {
       const y = 40 + Math.random() * (H - 160);
       const n = Math.round(6 * countMul);
       for (let i = 0; i < n; i++) {
-        const x = fromLeft ? -20 - i * 14 : W + 20 + i * 14;
-        const vx = (fromLeft ? 1 : -1) * baseSpeed * 0.9 * speedMul;
-        bullets.push(new NormalBullet(x, y, vx, 0, this.c.bullets.hitR));
+        const x  = fromLeft ? -20 - i * 14 : W + 20 + i * 14;
+        const vx = (fromLeft ? 1 : -1) * baseSpeed * 0.9;
+        bullets.push(new NormalBullet(x, y, vx, 0));
       }
     }
 
@@ -70,9 +72,9 @@ export class Spawner {
       const n = Math.round(7 * countMul);
       for (let i = 0; i < n; i++) {
         const ang = (fromLeft ? 0 : Math.PI) + (i - (n - 1) / 2) * (Math.PI / 16);
-        const vx = Math.cos(ang) * baseSpeed * speedMul;
-        const vy = Math.sin(ang) * baseSpeed * speedMul;
-        bullets.push(new NormalBullet(x0, y0, vx, vy, this.c.bullets.hitR));
+        const vx = Math.cos(ang) * baseSpeed;
+        const vy = Math.sin(ang) * baseSpeed;
+        bullets.push(new NormalBullet(x0, y0, vx, vy));
       }
     }
 
@@ -84,45 +86,44 @@ export class Spawner {
       const n = Math.round(26 * countMul);
       for (let i = 0; i < n; i++) {
         const ang = (i / n) * (Math.PI * 2);
-        const vx = Math.cos(ang) * baseSpeed * 0.9 * speedMul;
-        const vy = Math.sin(ang) * baseSpeed * 0.9 * speedMul;
-        bullets.push(new NormalBullet(cx, cy, vx, vy, this.c.bullets.hitR));
+        const vx = Math.cos(ang) * baseSpeed * 0.9;
+        const vy = Math.sin(ang) * baseSpeed * 0.9;
+        bullets.push(new NormalBullet(cx, cy, vx, vy));
       }
     }
 
-    // 5) 赤い球（数を減らす：ファストは低頻度）
+    // 5) 赤（少なめ）
     if (this.t.row >= (this.c.spawns.rowEvery || 6.6)) {
       this.t.row = 0;
-      // 少数のみ
       const n = Math.max(2, Math.round(3 * (countMul * 0.6)));
       const y = 60 + Math.random() * (H - 120);
       for (let i = 0; i < n; i++) {
-        const x = 40 + i * (W / (n + 1));
+        const x  = 40 + i * (W / (n + 1));
         const vx = (Math.random() < 0.5 ? -1 : 1) * fastSpeed;
         const vy = (Math.random() - 0.5) * 40;
-        bullets.push(new FastBullet(x, y, vx, vy, this.c.bullets.hitR));
+        bullets.push(new FastBullet(x, y, vx, vy));
       }
     }
 
-    // 6) 誘導弾（青）
+    // 6) 青（誘導）
     if (this.t.homing >= (this.c.spawns.homingEvery || 4.5)) {
       this.t.homing = 0;
       const side = Math.random() < 0.5 ? -1 : 1;
       const x = side < 0 ? -24 : W + 24;
       const y = 60 + Math.random() * (H - 120);
       const vx = side < 0 ? homingSpeed : -homingSpeed;
-      bullets.push(new HomingBullet(x, y, vx, 0, this.c.bullets.hitR, 200));
+      bullets.push(new HomingBullet(x, y, vx, 0, 3, 200)); // hitR=3, 旋回上限200°/s
     }
 
-    // 7) 巨大漢字弾（常にプレイヤー狙い／5sごと）
+    // 7) 巨大漢字弾
     if (this.t.kanji >= (this.c.spawns.kanjiEvery || 5.0)) {
       this.t.kanji = 0;
       const edge = Math.floor(Math.random() * 4); // 0:上 1:右 2:下 3:左
       let x = 0, y = 0;
       if (edge === 0) { x = Math.random()*W; y = -40; }
-      if (edge === 1) { x = W + 40; y = Math.random()*H; }
+      if (edge === 1) { x = W + 40;         y = Math.random()*H; }
       if (edge === 2) { x = Math.random()*W; y = H + 40; }
-      if (edge === 3) { x = -40; y = Math.random()*H; }
+      if (edge === 3) { x = -40;            y = Math.random()*H; }
       bullets.push(new KanjiBullet(x, y, kanjiSpeed, player, this.c.kanji));
     }
   }
