@@ -1,213 +1,138 @@
-// bullets.js — 通常/高速/誘導/巨大漢字弾
-export const BULLET_TYPES = {
-  NORMAL: "normal",
-  FAST:   "fast",
-  HOMING: "homing",
-  KANJI:  "kanji",   // 巨大漢字弾
-};
-
-// 画像パス（最終アセット名）
-const SPRITE_PATHS = {
-  [BULLET_TYPES.NORMAL]: "assets/img/bullet_normal.png",
-  [BULLET_TYPES.FAST]:   "assets/img/bullet_fast.png",
-  [BULLET_TYPES.HOMING]: "assets/img/bullet_homing.png",
-  [BULLET_TYPES.KANJI]:  "assets/img/bullet_big.png",
-};
-
-const V = (typeof window !== "undefined" && window.__APP_VERSION__) || "";
-const withV = (u) => V ? (u + (u.includes("?") ? "&" : "?") + "v=" + V) : u;
-
-const Sprites = {}; // type -> HTMLImageElement|null
+// bullets.js
+let imgNormal, imgFast, imgHoming, imgBig;
 
 export async function loadBulletSprites() {
-  const load = (src) => new Promise((res) => {
-    const im = new Image();
-    im.onload = () => res(im);
-    im.onerror = () => res(null); // 無くても動かす
-    im.src = withV(src);
-  });
-  for (const [k, src] of Object.entries(SPRITE_PATHS)) {
-    Sprites[k] = await load(src);
-    if (!Sprites[k]) console.warn("[bullet] sprite missing:", src);
+  function load(src) {
+    return new Promise((res, rej) => {
+      const im = new Image();
+      im.onload = () => res(im);
+      im.onerror = () => rej(new Error("bullet image load failed: " + src));
+      im.src = src;
+    });
   }
+  [imgNormal, imgFast, imgHoming, imgBig] = await Promise.all([
+    load("assets/img/bullet_normal.png"),
+    load("assets/img/bullet_fast.png"),
+    load("assets/img/bullet_homing.png"),
+    load("assets/img/bullet_big.png")
+  ]);
 }
 
-export class Bullet {
-  constructor({ type, x, y, vx, vy, r, hitR }) {
-    this.type = type;
-    this.x = x; this.y = y;
-    this.vx = vx; this.vy = vy;
-    this.r = r;
-    this.hitR = hitR;
+class BaseBullet {
+  constructor(x, y, vx, vy, hitR = 3) {
+    this.x = x; this.y = y; this.vx = vx; this.vy = vy;
+    this.hitR = hitR; this.rotation = 0;
   }
-
-  update(dt, player) {
-    if (this.type === BULLET_TYPES.HOMING && player) {
-      const maxTurn = (15 * Math.PI / 180) * dt;
-      const angCur = Math.atan2(this.vy, this.vx);
-      const dx = (player.x - this.x), dy = (player.y - this.y);
-      const angTar = Math.atan2(dy, dx);
-      let d = angTar - angCur;
-      d = (d + Math.PI) % (Math.PI * 2); if (d < 0) d += Math.PI * 2; d -= Math.PI;
-      const turn = Math.max(-maxTurn, Math.min(maxTurn, d));
-      const spd = Math.hypot(this.vx, this.vy) || 1;
-      const ang = angCur + turn;
-      this.vx = Math.cos(ang) * spd;
-      this.vy = Math.sin(ang) * spd;
-    }
+  update(dt /*, player */) {
     this.x += this.vx * dt;
     this.y += this.vy * dt;
+    this.rotation = Math.atan2(this.vy, this.vx);
   }
-
-  outOfBounds(w, h, m = 40) {
-    return (this.x < -m || this.x > w + m || this.y < -m || this.y > h + m);
-  }
-
   draw(g) {
-    const s = Sprites[this.type];
-    if (s) {
-      if (this.type === BULLET_TYPES.HOMING) {
-        const ang = Math.atan2(this.vy, this.vx);
-        g.save();
-        g.translate(this.x, this.y);
-        g.rotate(ang);
-        g.drawImage(s, -this.r, -this.r, this.r * 2, this.r * 2);
-        g.restore();
-      } else {
-        g.drawImage(s, this.x - this.r, this.y - this.r, this.r * 2, this.r * 2);
-      }
-    } else {
-      g.beginPath();
-      g.fillStyle = (this.type === BULLET_TYPES.FAST) ? "#f66" :
-                    (this.type === BULLET_TYPES.HOMING) ? "#6cf" :
-                    (this.type === BULLET_TYPES.KANJI) ? "#ffd84a" : "#fff";
-      g.arc(this.x, this.y, this.r, 0, Math.PI * 2);
-      g.fill();
-      g.lineWidth = 1;
-      g.strokeStyle = "#000";
-      g.stroke();
-    }
-  }
-}
-
-// ---- 巨大漢字弾 ----
-export class KanjiBullet extends Bullet {
-  constructor({ x, y, vx, vy, r, hitR, k, f, kanjiCfg }) {
-    super({ type: BULLET_TYPES.KANJI, x, y, vx, vy, r, hitR });
-    this.k = k;              // 漢字
-    this.f = f;              // ふりがな
-    this.cfg = kanjiCfg;     // { visualR, paddingRate, rubyRate, lineGapRate, rubyColor }
-    this._layoutCache = null;
-  }
-
-  update(dt, player) {
-    // 誘導：最大旋回 15°/s
-    const maxTurn = (15 * Math.PI / 180) * dt;
-    const angCur = Math.atan2(this.vy, this.vx);
-    const dx = (player.x - this.x), dy = (player.y - this.y);
-    const angTar = Math.atan2(dy, dx);
-    let d = angTar - angCur;
-    d = (d + Math.PI) % (Math.PI * 2); if (d < 0) d += Math.PI * 2; d -= Math.PI;
-    const turn = Math.max(-maxTurn, Math.min(maxTurn, d));
-    const spd = Math.hypot(this.vx, this.vy) || 1;
-    const ang = angCur + turn;
-    this.vx = Math.cos(ang) * spd;
-    this.vy = Math.sin(ang) * spd;
-
-    this.x += this.vx * dt;
-    this.y += this.vy * dt;
-  }
-
-  _ensureLayout(g) {
-    if (this._layoutCache) return this._layoutCache;
-
-    const r = this.r;
-    const pad = this.cfg.paddingRate ?? 0.12;
-    const inner = r * (1 - pad);                  // テキスト描画の余白込み半径
-    const rubyRate = this.cfg.rubyRate ?? 0.28;
-    const gapRate  = this.cfg.lineGapRate ?? 0.16;
-
-    // 行分割（3文字以上は2行に割る: 視認性優先の簡易ルール）
-    const text = this.k || "";
-    let lines;
-    if (text.length >= 3) {
-      const mid = Math.ceil(text.length / 2);
-      lines = [text.slice(0, mid), text.slice(mid)];
-    } else {
-      lines = [text];
-    }
-
-    // 100px基準で幅を測ってから縮尺で求める
-    const measureWidthAt = (s, px) => {
-      g.save();
-      g.font = `700 ${px}px Noto Sans JP, system-ui`;
-      const w = g.measureText(s).width;
-      g.restore();
-      return w;
-    };
-
-    const longest = lines.reduce((a, b) =>
-      (measureWidthAt(a, 100) > measureWidthAt(b, 100)) ? a : b
-    );
-
-    const w100 = Math.max(1, measureWidthAt(longest, 100));
-    // 最大横幅 = 直径(内側)
-    const maxW = inner * 2;
-    let mainPx = Math.min((maxW / w100) * 100, inner * 0.95); // 縦の暴れを抑える上限
-
-    // 2行なら縦方向制約もかける
-    if (lines.length === 2) {
-      const gapPx = mainPx * gapRate;
-      const totalH = mainPx * 2 + gapPx;
-      const maxH = inner * 2 * 0.78; // 上部ルビ用に少し控える
-      if (totalH > maxH) {
-        mainPx *= maxH / totalH;
-      }
-    }
-
-    const rubyPx = Math.max(8, Math.floor(mainPx * rubyRate));
-    const gapPx  = Math.floor(mainPx * gapRate);
-
-    this._layoutCache = { lines, mainPx, rubyPx, gapPx };
-    return this._layoutCache;
-  }
-
-  draw(g) {
-    // 背景円
-    const s = Sprites[BULLET_TYPES.KANJI];
-    if (s) g.drawImage(s, this.x - this.r, this.y - this.r, this.r * 2, this.r * 2);
-    else {
-      g.save();
-      g.fillStyle = "#222"; g.beginPath(); g.arc(this.x, this.y, this.r, 0, Math.PI*2); g.fill();
-      g.restore();
-    }
-
-    const { lines, mainPx, rubyPx, gapPx } = this._ensureLayout(g);
-
-    // ルビ（円の上側）
-    if (this.f) {
-      g.save();
-      g.font = `700 ${rubyPx}px Noto Sans JP, system-ui`;
-      g.fillStyle = this.cfg.rubyColor || "#f00";
-      g.textAlign = "center"; g.textBaseline = "alphabetic";
-      const topY = this.y - this.r + rubyPx + Math.max(2, this.r * 0.06);
-      g.fillText(this.f, this.x, topY);
-      g.restore();
-    }
-
-    // 漢字本体（中央寄せ）
     g.save();
-    g.font = `700 ${Math.floor(mainPx)}px Noto Sans JP, system-ui`;
-    g.fillStyle = "#ffffff";
+    g.translate(this.x, this.y);
+    g.rotate(this.rotation);
+    g.drawImage(imgNormal, -imgNormal.width/2, -imgNormal.height/2);
+    g.restore();
+  }
+}
+
+export class NormalBullet extends BaseBullet {
+  draw(g) {
+    g.save();
+    g.translate(this.x, this.y);
+    // 白い球（normal）
+    g.drawImage(imgNormal, -imgNormal.width/2, -imgNormal.height/2);
+    g.restore();
+  }
+}
+
+export class FastBullet extends BaseBullet {
+  draw(g) {
+    g.save();
+    g.translate(this.x, this.y);
+    g.drawImage(imgFast, -imgFast.width/2, -imgFast.height/2);
+    g.restore();
+  }
+}
+
+export class HomingBullet extends BaseBullet {
+  constructor(x, y, vx, vy, hitR = 3, maxTurnDeg = 180) {
+    super(x, y, vx, vy, hitR);
+    this.maxTurn = (maxTurnDeg * Math.PI) / 180;
+  }
+  update(dt, player) {
+    // 目標方向へ最大旋回角を制限しながら追尾
+    const tx = player.x - this.x, ty = player.y - this.y;
+    const tv = Math.atan2(ty, tx);
+    const cv = Math.atan2(this.vy, this.vx);
+    let d = ((tv - cv + Math.PI) % (2 * Math.PI)) - Math.PI;
+    const lim = this.maxTurn * dt;
+    if (d > lim) d = lim;
+    if (d < -lim) d = -lim;
+    const nv = cv + d;
+    const speed = Math.hypot(this.vx, this.vy);
+    this.vx = Math.cos(nv) * speed;
+    this.vy = Math.sin(nv) * speed;
+    super.update(dt);
+  }
+  draw(g) {
+    g.save();
+    g.translate(this.x, this.y);
+    g.rotate(this.rotation);
+    g.drawImage(imgHoming, -imgHoming.width/2, -imgHoming.height/2);
+    g.restore();
+  }
+}
+
+export class KanjiBullet extends BaseBullet {
+  constructor(x, y, speed, player, kanjiCfg) {
+    // 初期はプレイヤー方向へ
+    const ang = Math.atan2(player.y - y, player.x - x);
+    super(x, y, Math.cos(ang) * speed, Math.sin(ang) * speed, 24);
+    this.speed = speed;
+    this.maxTurn = (15 * Math.PI) / 180; // 15°/s
+    // 表示用
+    this.k = (kanjiCfg.list[Math.floor(Math.random() * kanjiCfg.list.length)] ?? {k:"漢字",f:"かんじ"});
+    this.cfg = kanjiCfg;
+    this.rotation = 0;
+  }
+  update(dt, player) {
+    // 穏やかに追尾
+    const tx = player.x - this.x, ty = player.y - this.y;
+    const tv = Math.atan2(ty, tx);
+    const cv = Math.atan2(this.vy, this.vx);
+    let d = ((tv - cv + Math.PI) % (2*Math.PI)) - Math.PI;
+    const lim = this.maxTurn * dt;
+    if (d > lim) d = lim;
+    if (d < -lim) d = -lim;
+    const nv = cv + d;
+    this.vx = Math.cos(nv) * this.speed;
+    this.vy = Math.sin(nv) * this.speed;
+    super.update(dt, player);
+  }
+  draw(g) {
+    const R = Math.min(this.cfg.maxR, this.cfg.visualR);
+    g.save();
+    g.translate(this.x, this.y);
+    g.drawImage(imgBig, -R, -R, R*2, R*2);
+    // 文字（中央揃え／円に収まるよう縮小）
+    const pad = R * this.cfg.paddingRate;
+    const textR = R - pad;
+    g.fillStyle = "#fff";
     g.textAlign = "center";
-    g.textBaseline = "middle";
-    if (lines.length === 1) {
-      g.fillText(lines[0], this.x, this.y + Math.floor(this.r * 0.08)); // 視覚補正で少し下げる
-    } else {
-      const y0 = this.y - (mainPx + gapPx) / 2;
-      g.fillText(lines[0], this.x, y0);
-      g.fillText(lines[1], this.x, y0 + mainPx + gapPx);
+    // 本文
+    g.font = `${Math.floor(textR * 0.9)}px Noto Sans JP, system-ui`;
+    // 文字がはみ出す場合は縮小
+    let size = textR * 0.9;
+    while (g.measureText(this.k.k).width > textR * 1.7 && size > 10) {
+      size -= 2; g.font = `${Math.floor(size)}px Noto Sans JP, system-ui`;
     }
+    g.fillText(this.k.k, 0, 12);
+    // ルビ（上側）
+    g.fillStyle = this.cfg.rubyColor || "#f00";
+    g.font = `${Math.floor(size * this.cfg.rubyRate)}px Noto Sans JP, system-ui`;
+    g.fillText(this.k.f, 0, -textR * 0.4);
     g.restore();
   }
 }
