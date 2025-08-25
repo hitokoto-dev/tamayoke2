@@ -29,15 +29,18 @@
   <pre id="bootlog" class="boot">boot…</pre>
 
 <script>
-/* ============================
-   tamayoke2 — 単一ファイル確実起動版
-   ・外部JS/設定に依存なし
-   ・初回は必ず送信、その後はベストのみ
-   ・右上にTOP10表示（GAS /exec 直指定）
-   ============================ */
+/* ==========================================================
+   tamayoke2 — 単一ファイル“強化”版
+   ・外部JS/設定に依存しない（1ファイルで完結）
+   ・スプライトがあれば使用（無ければ自動フォールバック）
+     - assets/bullets/{white,red,blue,kanji}.png があれば使う
+   ・弾種：白(ノーマル)／赤(ファスト)／青(誘導)／巨大漢字弾
+   ・初回は必ず送信、その後はベスト更新時のみ
+   ・右上TOP10表示（GAS /exec 直指定）
+   ========================================================== */
 
-// ★必ず毎回違う文字列に（キャッシュ破り表示用）
-const V = "oneshot-20250825-ultimate-1";
+// ★毎回変える（キャッシュ破り表示用）
+const V = "oneshot-20250825-ultimate-2";
 
 // ★あなたの GAS /exec（直指定）
 const RANK_ENDPOINT = "https://script.google.com/macros/s/AKfycbxvQ-miSQfyYy2fEmeNstkb-WiHMtTeuJjl2KzuklxYc1UOeytF6F-O1KX1waNZ8QUO2w/exec";
@@ -46,7 +49,6 @@ const RANK_ENDPOINT = "https://script.google.com/macros/s/AKfycbxvQ-miSQfyYy2fEm
 const blog = document.getElementById("bootlog");
 function bl(msg){ blog.textContent += "\n" + msg; }
 
-// ---- DOM ----
 window.addEventListener("DOMContentLoaded", () => boot().catch(e=>{bl("BOOT ERROR: "+e.message); console.error(e);} ));
 
 async function boot(){
@@ -60,7 +62,23 @@ async function boot(){
   function fit(){ const s=Math.min(innerWidth/W, innerHeight/H); canvas.style.width=`${(W*s)|0}px`; canvas.style.height=`${(H*s)|0}px`; }
   addEventListener("resize",fit); fit();
 
-  // ---- ランキング（この中に完結） ----
+  // ---------- スプライト（任意・無ければフォールバック） ----------
+  const SPR = new Map();
+  async function loadImage(url){ return new Promise((res,rej)=>{ const i=new Image(); i.onload=()=>res(i); i.onerror=rej; i.src=url; }); }
+  async function tryLoad(key,url){ try{ const img=await loadImage(url); SPR.set(key,img); bl("sprite ok: "+url); }catch{ bl("sprite miss: "+url); } }
+  await Promise.all([
+    tryLoad("white","assets/bullets/white.png"),
+    tryLoad("red","assets/bullets/red.png"),
+    tryLoad("blue","assets/bullets/blue.png"),
+    tryLoad("kanji","assets/bullets/kanji.png"),
+  ]);
+  function drawSpriteOrCircle(key,x,y,r,fallback){
+    const sp=SPR.get(key);
+    if(sp){ const s=r*2; ctx.drawImage(sp, x-r, y-r, s, s); }
+    else { ctx.fillStyle=fallback; ctx.beginPath(); ctx.arc(x,y,r,0,Math.PI*2); ctx.fill(); }
+  }
+
+  // ---------- ランキング ----------
   const elLB = document.getElementById("ui-leaderboard");
   class Rank {
     constructor(endpoint){ this.endpoint=String(endpoint||"").trim(); this.enabled=!!this.endpoint; }
@@ -92,54 +110,82 @@ async function boot(){
       elLB.textContent=lines.length?lines.join("\n"):"まだスコアがありません";
     }catch(e){ console.error(e); elLB.textContent="通信エラー"; }
   }
+  if(rank.enabled){ bl("endpoint="+rank.endpoint); await renderLeaderboard(); } else { bl("endpoint=(empty) → 未設定"); }
 
-  // 初回描画
-  if(rank.enabled){ bl("endpoint="+rank.endpoint); await renderLeaderboard(); }
-  else { bl("endpoint=(empty) → 未設定表示"); }
-
-  // ---- ローカル保存 ----
+  // ---------- ローカル保存 ----------
   const loadPlayerName = () => localStorage.getItem("playerName") || "";
   const savePlayerName = n => localStorage.setItem("playerName", String(n||"").slice(0,16));
   const loadBest = () => Number(localStorage.getItem("bestScore")||"0")|0;
   const saveBest = v => localStorage.setItem("bestScore", String(v|0));
 
-  // ---- 入力 ----
+  // ---------- 入力 ----------
   const keys=new Set(); let pointerDown=false, pointerX=W/2, pointerY=H*0.75;
-  addEventListener("keydown",e=>{ if(!e.repeat) keys.add(e.key); if(["ArrowUp","ArrowDown","ArrowLeft","ArrowRight"," "].includes(e.key)) e.preventDefault(); });
+  addEventListener("keydown",e=>{ if(!e.repeat) keys.add(e.key);
+    if(["ArrowUp","ArrowDown","ArrowLeft","ArrowRight"," "].includes(e.key)) e.preventDefault();
+  });
   addEventListener("keyup",e=>keys.delete(e.key));
   function cpos(e){ const r=canvas.getBoundingClientRect(); return {x:(e.clientX-r.left)*W/r.width, y:(e.clientY-r.top)*H/r.height}; }
   canvas.addEventListener("pointerdown",e=>{ pointerDown=true; const p=cpos(e); pointerX=p.x; pointerY=p.y; });
   addEventListener("pointerup",()=> pointerDown=false);
   canvas.addEventListener("pointermove",e=>{ if(!pointerDown) return; const p=cpos(e); pointerX=p.x; pointerY=p.y; });
 
-  // ---- ゲーム状態 ----
+  // ---------- ゾーン ----------
+  const SAFE_H = 90; // 下部セーフ高さ
+  const bonus = { cx:480, cy:243, rOrbit:70, radius:48, speed:0.6 };
+
+  function drawZones(t){
+    // セーフ
+    ctx.fillStyle="rgba(20,200,120,0.10)"; ctx.fillRect(0, H-SAFE_H, W, SAFE_H);
+    // ボーナス
+    const ang=t*bonus.speed, bx=bonus.cx+Math.cos(ang)*bonus.rOrbit, by=bonus.cy+Math.sin(ang)*bonus.rOrbit;
+    ctx.fillStyle="rgba(250,210,60,0.12)";
+    ctx.beginPath(); ctx.arc(bx,by,bonus.radius,0,Math.PI*2); ctx.fill();
+    ctx.strokeStyle="rgba(250,210,60,0.25)"; ctx.beginPath(); ctx.arc(bonus.cx,bonus.cy,bonus.rOrbit,0,Math.PI*2); ctx.stroke();
+    return {bx,by};
+  }
+  function inCircle(px,py,cx,cy,r){ const dx=px-cx, dy=py-cy; return dx*dx+dy*dy <= r*r; }
+
+  // ---------- ゲーム状態 ----------
   const TITLE="title", PLAY="play", OVER="over";
   const player={ x:W/2, y:H*0.8, size:24, hitR:10, speed:240, slow:0.5 };
   let bullets=[], state=TITLE, allowReturnAt=0, timePlay=0, score=0;
 
-  // 弾スポーン（安定重視）
-  const timers={ rain:0, side:0, ring:0, homing:0 };
-  function spawn(dt){
-    timers.rain+=dt; timers.side+=dt; timers.ring+=dt; timers.homing+=dt;
+  // ---------- 弾（4種） ----------
+  const timers={ rain:0, side:0, ring:0, homing:0, kanji:0 };
+  function randomKanji(){ const s="炎雷風水土空光闇心愛夢星竜鬼斬破護爆迅煌零冥極華刹翔滅砲砕烈迅煌舞守衛刃彗閃虎龍雷火".split(""); return s[(Math.random()*s.length)|0]; }
 
+  function spawn(dt){
+    timers.rain+=dt; timers.side+=dt; timers.ring+=dt; timers.homing+=dt; timers.kanji+=dt;
+
+    // 雨（白）
     if(timers.rain>=0.16){ timers.rain=0;
       const x=20+Math.random()*(W-40);
-      bullets.push({t:"w",x,y:-10,vx:0,vy:130+Math.random()*50,r:6,a:true});
+      bullets.push({kind:"white",x,y:-10,vx:0,vy:130+Math.random()*50,r:6,alive:true});
     }
+    // 横（赤）
     if(timers.side>=1.2){ timers.side=0;
       const L=Math.random()<0.5, y0=60+Math.random()*(H-220);
-      for(let i=0;i<6;i++){ bullets.push({t:"r",x:L?-10:W+10,y:y0+i*10,vx:L?160:-160,vy:(Math.random()*2-1)*20,r:5,a:true}); }
+      for(let i=0;i<6;i++){
+        bullets.push({kind:"red",x:L?-10:W+10,y:y0+i*10,vx:L?160:-160,vy:(Math.random()*2-1)*20,r:5,alive:true});
+      }
     }
+    // リング（白）
     if(timers.ring>=2.6){ timers.ring=0;
-      const cx=80+Math.random()*(W-160), cy=80+Math.random()*(H-220), n=18, spd=120;
-      for(let i=0;i<n;i++){ const a=i/n*Math.PI*2; bullets.push({t:"w",x:cx,y:cy,vx:Math.cos(a)*spd,vy:Math.sin(a)*spd,r:6,a:true}); }
+      const cx=80+Math.random()*(W-160), cy=80+Math.random()*(H-220), n=24, spd=130;
+      for(let i=0;i<n;i++){ const a=i/n*Math.PI*2; bullets.push({kind:"white",x:cx,y:cy,vx:Math.cos(a)*spd,vy:Math.sin(a)*spd,r:6,alive:true}); }
     }
+    // 誘導（青）
     if(timers.homing>=3.8){ timers.homing=0;
       const edge=(Math.random()*4)|0; let x=0,y=0;
       if(edge===0){x=Math.random()*W;y=-10;} if(edge===1){x=W+10;y=Math.random()*H;}
       if(edge===2){x=Math.random()*W;y=H+10;} if(edge===3){x=-10;y=Math.random()*H;}
       const ang=Math.atan2(player.y-y, player.x-x), v=140;
-      bullets.push({t:"b",x,y,vx:Math.cos(ang)*v,vy:Math.sin(ang)*v,turn:120,r:6,a:true,h:true});
+      bullets.push({kind:"blue",x,y,vx:Math.cos(ang)*v,vy:Math.sin(ang)*v,turnDeg:120,r:6,alive:true,homing:true});
+    }
+    // 巨大漢字弾（緩やか追尾）
+    if(timers.kanji>=5.0){ timers.kanji=0;
+      const x=40+Math.random()*(W-80);
+      bullets.push({kind:"kanji",x,y:-30,vx:0,vy:90,turnDeg:60,r:24,alive:true,text:randomKanji()});
     }
   }
 
@@ -157,44 +203,74 @@ async function boot(){
     // 弾
     spawn(dt);
     for(const b of bullets){
-      if(b.h){
-        const to=Math.atan2(player.y-b.y, player.x-b.x);
+      if(b.homing){
+        const angTo=Math.atan2(player.y-b.y, player.x-b.x);
         const cur=Math.atan2(b.vy,b.vx);
-        const max=(b.turn*Math.PI/180)*dt;
-        let diff=to-cur; while(diff>Math.PI) diff-=Math.PI*2; while(diff<-Math.PI) diff+=Math.PI*2;
+        const max=(b.turnDeg*Math.PI/180)*dt;
+        let diff=angTo-cur; while(diff>Math.PI) diff-=Math.PI*2; while(diff<-Math.PI) diff+=Math.PI*2;
         diff=Math.max(-max,Math.min(max,diff));
         const next=cur+diff; const sp=Math.hypot(b.vx,b.vy)||140;
         b.vx=Math.cos(next)*sp; b.vy=Math.sin(next)*sp;
+      } else if (b.kind==="kanji"){
+        // 緩やか追尾
+        const angTo=Math.atan2(player.y-b.y, player.x-b.x);
+        const cur=Math.atan2(b.vy,b.vx);
+        const max=(b.turnDeg*Math.PI/180)*dt;
+        let diff=angTo-cur; while(diff>Math.PI) diff-=Math.PI*2; while(diff<-Math.PI) diff+=Math.PI*2;
+        diff=Math.max(-max,Math.min(max,diff));
+        const next=cur+diff; const sp=Math.hypot(b.vx,b.vy)||110;
+        b.vx=Math.cos(next)*sp; b.vy=Math.sin(next)*sp;
       }
       b.x+=b.vx*dt; b.y+=b.vy*dt;
-      if(b.x<-60||b.x>W+60||b.y<-60||b.y>H+60) b.a=false;
+      if(b.x<-80||b.x>W+80||b.y<-80||b.y>H+80) b.alive=false;
     }
-    bullets=bullets.filter(b=>b.a);
+    bullets=bullets.filter(b=>b.alive);
 
     // 当たり
-    for(const b of bullets){ const rr=(b.r+player.hitR), dx=b.x-player.x, dy=b.y-player.y; if(dx*dx+dy*dy<=rr*rr) return true; }
+    for(const b of bullets){
+      const rr=(b.r+player.hitR), dx=b.x-player.x, dy=b.y-player.y;
+      if(dx*dx+dy*dy<=rr*rr) return true;
+    }
     return false;
   }
 
-  // 描画
+  // ---------- 描画 ----------
   function drawBG(){
     const g=ctx.createLinearGradient(0,0,0,H); g.addColorStop(0,"#0b1020"); g.addColorStop(1,"#101a35");
     ctx.fillStyle=g; ctx.fillRect(0,0,W,H);
-    ctx.fillStyle="rgba(20,200,120,0.10)"; ctx.fillRect(0,H-90,W,90); // 下部セーフ
   }
   function drawPlayer(){
     ctx.save(); ctx.translate(player.x,player.y);
-    const s=player.size; ctx.fillStyle="#4cf";
-    ctx.beginPath(); ctx.moveTo(0,-s); ctx.lineTo(s*0.7,0); ctx.lineTo(0,s); ctx.lineTo(-s*0.7,0); ctx.closePath(); ctx.fill();
+    const s=player.size;
+    ctx.fillStyle="#4cf"; ctx.beginPath(); ctx.moveTo(0,-s); ctx.lineTo(s*0.7,0); ctx.lineTo(0,s); ctx.lineTo(-s*0.7,0); ctx.closePath(); ctx.fill();
     ctx.strokeStyle="rgba(255,255,255,0.35)"; ctx.beginPath(); ctx.arc(0,0,player.hitR,0,Math.PI*2); ctx.stroke();
     ctx.restore();
   }
-  function drawBullets(){ for(const b of bullets){ ctx.fillStyle = b.t==="r"?"#f55":b.t==="b"?"#6cf":"#fff"; ctx.beginPath(); ctx.arc(b.x,b.y,b.r,0,Math.PI*2); ctx.fill(); } }
-  function drawTitle(){ ctx.fillStyle="#fff"; ctx.textAlign="center"; ctx.textBaseline="middle"; ctx.font="48px Orbitron, sans-serif"; ctx.fillText("TAMAYOKE 2", W/2, H*0.36); ctx.font="18px Noto Sans JP, sans-serif"; ctx.fillText("クリック／Enter でスタート", W/2, H*0.36+56); }
+  function drawBullets(){
+    for(const b of bullets){
+      if(b.kind==="white") drawSpriteOrCircle("white", b.x,b.y,b.r, "#fff");
+      else if(b.kind==="red") drawSpriteOrCircle("red", b.x,b.y,b.r, "#f55");
+      else if(b.kind==="blue") drawSpriteOrCircle("blue", b.x,b.y,b.r, "#6cf");
+      else if(b.kind==="kanji"){
+        // 円背景＋漢字＋赤ルビ
+        ctx.save(); ctx.translate(b.x,b.y);
+        ctx.fillStyle="rgba(255,255,255,0.12)"; ctx.beginPath(); ctx.arc(0,0,b.r,0,Math.PI*2); ctx.fill();
+        drawSpriteOrCircle("kanji", b.x,b.y,b.r, "#fff");
+        ctx.fillStyle="#fff"; ctx.textAlign="center"; ctx.textBaseline="middle";
+        ctx.font="bold 20px Noto Sans JP, sans-serif"; ctx.fillText(b.text||"炎",0,2);
+        ctx.fillStyle="#f55"; ctx.font="10px Noto Sans JP, sans-serif"; ctx.fillText("アツイ",0,-b.r+10);
+        ctx.restore();
+      }
+    }
+  }
+  function drawTitle(){ ctx.fillStyle="#fff"; ctx.textAlign="center"; ctx.textBaseline="middle";
+    ctx.font="48px Orbitron, sans-serif"; ctx.fillText("TAMAYOKE 2", W/2, H*0.36);
+    ctx.font="18px Noto Sans JP, sans-serif"; ctx.fillText("クリック／Enter でスタート", W/2, H*0.36+56);
+  }
   function drawGameOver(){ ctx.font="46px Orbitron, sans-serif"; ctx.textAlign="center"; ctx.textBaseline="middle"; ctx.fillStyle="#ff9"; ctx.fillText("GAME OVER", W/2, H*0.35); ctx.font="18px Noto Sans JP, sans-serif"; ctx.fillStyle="#fff"; ctx.fillText("0.7秒後に クリック／Enter でタイトルへ", W/2, H*0.35+50); }
   function drawScore(){ const s=String(score|0).padStart(6,"0"); ctx.font="20px Orbitron, monospace"; ctx.textAlign="right"; ctx.textBaseline="top"; ctx.fillStyle="#fff"; ctx.fillText(`SCORE  ${s}`, W-16, 12); }
 
-  // 送信（初回必ず、その後はベストのみ）
+  // ---------- 送信（初回必ず・以降ベスト時） ----------
   const SUBMITTED_KEY="rankSubmittedOnce";
   async function submitScore(finalScore){
     if(!rank.enabled) return;
@@ -209,34 +285,35 @@ async function boot(){
     if(!name){ name=(prompt("名前（16文字まで）を入力してください","YOU")||"YOU").trim().slice(0,16); savePlayerName(name); }
 
     const prev=elLB.textContent; elLB.textContent="SUBMITTING...";
-    const res = await rank.submit(name, finalScore|0);
+    const res=await rank.submit(name, finalScore|0);
     if(res.status==="ok"){ localStorage.setItem(SUBMITTED_KEY,"1"); await renderLeaderboard(); }
-    else { console.error(res.error||"submit failed"); elLB.textContent=prev || "通信エラー"; }
+    else { console.error(res.error||"submit failed"); elLB.textContent=prev||"通信エラー"; }
   }
 
-  // ループ
+  // ---------- ループ ----------
   let prev=performance.now();
-  let showTitleOnce=false; // タイトル描画確認用
   function loop(ts){
     const dt=Math.min(1/20, Math.max(0,(ts-prev)/1000)); prev=ts;
 
+    drawBG();
+    const {bx,by}=drawZones(timePlay);
+
     if(state===TITLE){
-      if(!showTitleOnce){ bl("title ready"); showTitleOnce=true; }
+      drawTitle();
       if(keys.has("Enter")||pointerDown){ pointerDown=false; state=PLAY; timePlay=0; score=0; bullets.length=0; }
     }else if(state===PLAY){
-      timePlay+=dt; score += 10*dt;
+      timePlay+=dt; const bonusOn = inCircle(player.x,player.y,bx,by,bonus.radius);
+      score += (bonusOn?4:1)*10*dt;
       if(update(dt)){ const fs=score|0; submitScore(fs).catch(()=>{}); state=OVER; allowReturnAt=performance.now()+700; bullets.length=0; }
-    }else if(state===OVER){
+      drawBullets(); drawPlayer(); drawScore();
+    }else{ // OVER
+      drawBullets(); drawGameOver(); drawScore();
       if(performance.now()>=allowReturnAt && (keys.has("Enter")||pointerDown)){ pointerDown=false; state=TITLE; }
     }
 
-    drawBG();
-    if(state===TITLE){ drawTitle(); }
-    else if(state===PLAY){ drawBullets(); drawPlayer(); drawScore(); }
-    else { drawBullets(); drawGameOver(); drawScore(); }
-
     requestAnimationFrame(loop);
   }
+  bl("title ready");
   requestAnimationFrame(loop);
 }
 </script>
