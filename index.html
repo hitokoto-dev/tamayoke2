@@ -30,15 +30,16 @@
 
 <script>
 /* ==========================================================
-   tamayoke2 — 単一ファイル版（要望反映）
-   - 巨大漢字弾: 5s周期, r=240, ノンホーミング（軌道固定）
-   - 誘導弾(青): r=30, 累計70°で追尾終了→直進
-   - セーフゾーン: 当たり無効 + 20点/秒 減点（スコア0未満なし）
-   - SCOREぶれ防止 / プレイヤー回転なし / リング廃止
+   tamayoke2 — 単一ファイル版（安定化）
+   ・巨大漢字弾：5秒ごと／r=240（10倍）／非追尾
+   ・誘導弾（青）：r=30（5倍）、累計70°曲がったら追尾終了→直進
+   ・セーフゾーン：当たり無効＋20点/秒の減点（0未満にならない）
+   ・セーフ画像は縦横比維持のタイル、ボーナス半径=144（3倍）
+   ・通常弾は遅め、リング弾は廃止、SCOREのブレ無し、プレイヤーは常に前向き
    ========================================================== */
 
 // ★キャッシュ破り（毎回変える）
-const V = "fix-giant10x-nonhoming-homing5x-safe-penalty-20250825-2";
+const V = "stable-fix-giant10x-nonhoming-homing5x-safe-penalty-20250825-3";
 
 // ★GAS /exec
 const RANK_ENDPOINT = "https://script.google.com/macros/s/AKfycbxvQ-miSQfyYy2fEmeNstkb-WiHMtTeuJjl2KzuklxYc1UOeytF6F-O1KX1waNZ8QUO2w/exec";
@@ -63,7 +64,7 @@ const BGM_SRC = {
 
 // ---- 調整ノブ ----
 const SAFE_H = 90;                         // セーフゾーン高さ
-const BONUS = { cx:480, cy:243, rOrbit:70, radius:144, speed:0.6 }; // ボーナス大
+const BONUS = { cx:480, cy:243, rOrbit:70, radius:144, speed:0.6 }; // ボーナス（3倍）
 const SAFE_PENALTY_PER_SEC = 20;           // セーフ中の減点速度
 const NORMAL_FALL_MIN = 90, NORMAL_FALL_RAND = 30; // 白弾速度
 const HOMING_MAX_STEER_DEG = 70;           // 誘導の累計回頭角
@@ -144,7 +145,7 @@ async function boot(){
   }
   await Promise.all(Object.entries(BGM_SRC).map(([k,u])=>decodeAudio(k,u)));
 
-  // BGMプレイヤ
+  // BGMプレイヤ（※このスコープで1回だけ生成）
   class BGM {
     constructor(){ this.g1=AC.createGain(); this.g2=AC.createGain(); this.g1.connect(master); this.g2.connect(master); this.s1=this.s2=null; this.which=0; this.g1.gain.value=this.g2.gain.value=0; }
     _startOn(g,buf){ const s=AC.createBufferSource(); s.buffer=buf; s.loop=true; s.connect(g); s.start(); return s; }
@@ -180,7 +181,7 @@ async function boot(){
   function beep(hz=880,ms=120,vol=0.25){ if(!AC) return; const o=AC.createOscillator(); o.type="square"; o.frequency.value=hz; const g=AC.createGain(); g.gain.value=vol; o.connect(g).connect(master); o.start(); const now=AC.currentTime; g.gain.setValueAtTime(vol,now); g.gain.linearRampToValueAtTime(0,now+ms/1000); setTimeout(()=>{try{o.stop()}catch{}},ms+20); }
   function thud(){ if(!AC) return; const o=AC.createOscillator(); o.type="triangle"; const g=AC.createGain(); o.connect(g).connect(master); const now=AC.currentTime; o.frequency.setValueAtTime(200,now); o.frequency.exponentialRampToValueAtTime(60,now+0.2); g.gain.setValueAtTime(0.5,now); g.gain.exponentialRampToValueAtTime(0.001,now+0.25); o.start(); setTimeout(()=>{try{o.stop()}catch{}},260); }
 
-  const bgm = new BGM();
+  const bgm = new BGM(); // ← ★ここで1回だけ作る（重複定義なし）
 
   // ---------- 背景 ----------
   const stars = [{n:60, sp:10, pts:[]},{n:40, sp:20, pts:[]},{n:20, sp:35, pts:[]},];
@@ -194,7 +195,7 @@ async function boot(){
 
   // ---------- ゾーン描画 ----------
   function drawZones(t){
-    // セーフ（縦横比保持で高さ合わせ→横タイル）
+    // セーフ（縦横比維持で高さ合わせ→横タイル）
     const texSafe=IMG.get("zoneSafe");
     if(texSafe){
       const y=H-SAFE_H;
@@ -251,11 +252,11 @@ async function boot(){
       bullets.push({kind:"homing",x,y,vx:Math.cos(ang)*v,vy:Math.sin(ang)*v,
                     turnDeg:120, r:30, alive:true, homing:true, steeredDeg:0, maxSteerDeg:HOMING_MAX_STEER_DEG});
     }
-    // 巨大漢字弾 — 5sごと / r=240 / 追尾しない
+    // 巨大漢字弾 — 5sごと / r=240 / 非追尾
     if(timers.kanji>=5.0){ timers.kanji=0;
       const r=240; // 10倍
       const x = Math.max(r+10, Math.min(W-(r+10), Math.random()*W)); // 画面内に出す
-      bullets.push({kind:"big",x,y:-r, vx:0, vy:95, r, alive:true, text:randomKanji()}); // ノンホーミング
+      bullets.push({kind:"big",x,y:-r, vx:0, vy:95, r, alive:true, text:randomKanji()}); // 追尾処理なし
     }
   }
 
@@ -337,7 +338,8 @@ async function boot(){
         const sp=IMG.get("b_big"); ctx.save(); ctx.translate(b.x,b.y);
         ctx.fillStyle="rgba(255,255,255,0.12)"; ctx.beginPath(); ctx.arc(0,0,b.r,0,Math.PI*2); ctx.fill();
         if(sp) ctx.drawImage(sp, -b.r, -b.r, b.r*2, b.r*2);
-        ctx.fillStyle="#fff"; ctx.textAlign="center"; ctx.textBaseline="middle"; ctx.font="bold "+Math.floor(b.r*0.18)+"px Noto Sans JP, sans-serif"; ctx.fillText(b.text||"炎",0,4);
+        ctx.fillStyle="#fff"; ctx.textAlign="center"; ctx.textBaseline="middle";
+        ctx.font="bold "+Math.floor(b.r*0.18)+"px Noto Sans JP, sans-serif"; ctx.fillText(b.text||"炎",0,4);
         ctx.fillStyle="#f55"; ctx.font=Math.floor(b.r*0.075)+"px Noto Sans JP, sans-serif"; ctx.fillText("アツイ",0,-b.r+Math.max(14,Math.floor(b.r*0.09)));
         ctx.restore();
       }
@@ -382,7 +384,6 @@ async function boot(){
   let prev=performance.now(), tAccum=0;
   bl("title ready");
 
-  const bgm = new BGM();
   if(!AC) makeAC();
   if(ABUF.size){ bgm.play("title", 400); } else { padCrossTo("title", 400); }
 
