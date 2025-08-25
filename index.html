@@ -30,20 +30,21 @@
 
 <script>
 /* ==========================================================
-   tamayoke2 — 単一ファイル版（assets/img + assets/audio 対応）
-   ・画像/音源が無い場合は自動フォールバック
-   ・画像/音源すべて ?v=… でキャッシュ破り
-   ・BGM: mp3をWebAudioでクロスフェード再生（無ければ内蔵パッド）
-   ・ランキング: GAS /exec 直指定（初回必ず送信）
+   tamayoke2 — assets/img + assets/audio 対応単一ファイル版
+   ・今回の修正：
+     - セーフゾーン画像は等倍スケールでタイル（縦横比保持）
+     - ボーナス半径を 96 に拡大
+     - 通常弾（白）を減速（vy 90〜120）
+     - 360度ばら撒き（リング）を完全廃止
    ========================================================== */
 
 // ★キャッシュ破り（毎回変えてください）
-const V = "assets-img-audio-20250825-2";
+const V = "fix-safe-aspect-bonus-big-slow-normal-20250825-1";
 
 // ★あなたの GAS /exec（直指定）
 const RANK_ENDPOINT = "https://script.google.com/macros/s/AKfycbxvQ-miSQfyYy2fEmeNstkb-WiHMtTeuJjl2KzuklxYc1UOeytF6F-O1KX1waNZ8QUO2w/exec";
 
-// 画像パス（実在しなくてもOK：無ければフォールバック）
+// 画像パス（存在しなくてもOK：無ければフォールバック）
 const IMG_SRC = {
   bg:         "assets/img/bg_mechcity_loop.png",
   zoneSafe:   "assets/img/zone_safe.png",
@@ -135,48 +136,24 @@ async function boot(){
       ABUF.set(key, buf); bl("bgm ok: "+url);
     }catch(e){ bl("bgm miss: "+url); }
   }
-  // 先にデコード試行（失敗してもフォールバック有）
   await Promise.all(Object.entries(BGM_SRC).map(([k,u])=>decodeAudio(k,u)));
 
   // BGMプレイヤ（2chクロスフェード）
   class BGM {
-    constructor(){
-      this.g1=AC.createGain(); this.g2=AC.createGain(); this.g1.connect(master); this.g2.connect(master);
-      this.s1=null; this.s2=null; this.cur=""; this.which=0;
-      this.g1.gain.value=0; this.g2.gain.value=0;
-    }
-    _startOn(g,buf){
-      const s=AC.createBufferSource(); s.buffer=buf; s.loop=true; s.connect(g);
-      s.start(); return s;
-    }
+    constructor(){ this.g1=AC.createGain(); this.g2=AC.createGain(); this.g1.connect(master); this.g2.connect(master); this.s1=this.s2=null; this.which=0; this.g1.gain.value=this.g2.gain.value=0; }
+    _startOn(g,buf){ const s=AC.createBufferSource(); s.buffer=buf; s.loop=true; s.connect(g); s.start(); return s; }
     play(name, ms=400){
       const buf=ABUF.get(name);
-      if(!buf){ // フォールバック：内蔵パッド
-        padCrossTo(name==="play"?"play":"title", ms);
-        this.cur=name; return;
-      }
-      padStop("title"); padStop("play");
+      if(!buf){ padCrossTo(name==="play"?"play":"title", ms); return; }
       const now=AC.currentTime, dur=Math.max(0.01, ms/1000);
-      if(this.which===0){
-        if(this.s2){ try{this.s2.stop();}catch{} this.s2=null; }
-        if(!this.s1) this.s1=this._startOn(this.g1,buf); else { try{this.s1.stop();}catch{} this.s1=this._startOn(this.g1,buf); }
-        this.g1.gain.setValueAtTime(this.g1.gain.value, now);
-        this.g1.gain.linearRampToValueAtTime(0.6, now+dur);
-        this.g2.gain.setValueAtTime(this.g2.gain.value, now);
-        this.g2.gain.linearRampToValueAtTime(0.0, now+dur);
-        this.which=1;
-      }else{
-        if(this.s1){ try{this.s1.stop();}catch{} this.s1=null; }
-        if(!this.s2) this.s2=this._startOn(this.g2,buf); else { try{this.s2.stop();}catch{} this.s2=this._startOn(this.g2,buf); }
-        this.g2.gain.setValueAtTime(this.g2.gain.value, now);
-        this.g2.gain.linearRampToValueAtTime(0.6, now+dur);
-        this.g1.gain.setValueAtTime(this.g1.gain.value, now);
-        this.g1.gain.linearRampToValueAtTime(0.0, now+dur);
-        this.which=0;
-      }
-      this.cur=name;
+      if(this.which===0){ if(this.s2){try{this.s2.stop()}catch{} this.s2=null;} if(this.s1){try{this.s1.stop()}catch{} } this.s1=this._startOn(this.g1,buf);
+        this.g1.gain.setValueAtTime(this.g1.gain.value, now); this.g1.gain.linearRampToValueAtTime(0.6, now+dur);
+        this.g2.gain.setValueAtTime(this.g2.gain.value, now); this.g2.gain.linearRampToValueAtTime(0.0, now+dur); this.which=1;
+      }else{ if(this.s1){try{this.s1.stop()}catch{} this.s1=null;} if(this.s2){try{this.s2.stop()}catch{} } this.s2=this._startOn(this.g2,buf);
+        this.g2.gain.setValueAtTime(this.g2.gain.value, now); this.g2.gain.linearRampToValueAtTime(0.6, now+dur);
+        this.g1.gain.setValueAtTime(this.g1.gain.value, now); this.g1.gain.linearRampToValueAtTime(0.0, now+dur); this.which=0; }
     }
-    stop(){ try{this.s1?.stop();}catch{} try{this.s2?.stop();}catch{} this.s1=this.s2=null; this.g1.gain.value=this.g2.gain.value=0; }
+    stop(){ try{this.s1?.stop()}catch{} try{this.s2?.stop()}catch{} this.s1=this.s2=null; this.g1.gain.value=this.g2.gain.value=0; }
   }
 
   // パッドBGM（フォールバック）
@@ -197,22 +174,43 @@ async function boot(){
   function beep(hz=880,ms=120,vol=0.25){ if(!AC) return; const o=AC.createOscillator(); o.type="square"; o.frequency.value=hz; const g=AC.createGain(); g.gain.value=vol; o.connect(g).connect(master); o.start(); const now=AC.currentTime; g.gain.setValueAtTime(vol,now); g.gain.linearRampToValueAtTime(0,now+ms/1000); setTimeout(()=>{try{o.stop()}catch{}},ms+20); }
   function thud(){ if(!AC) return; const o=AC.createOscillator(); o.type="triangle"; const g=AC.createGain(); o.connect(g).connect(master); const now=AC.currentTime; o.frequency.setValueAtTime(200,now); o.frequency.exponentialRampToValueAtTime(60,now+0.2); g.gain.setValueAtTime(0.5,now); g.gain.exponentialRampToValueAtTime(0.001,now+0.25); o.start(); setTimeout(()=>{try{o.stop()}catch{}},260); }
 
-  const bgm = new Proxy(new BGM(), {get:(t,p)=>t[p]});
+  const bgm = new BGM();
 
   // ---------- ゾーン ----------
   const SAFE_H = 90; // 下部セーフ高さ
-  const bonus = { cx:480, cy:243, rOrbit:70, radius:48, speed:0.6 };
+  const bonus = { cx:480, cy:243, rOrbit:70, radius:96, speed:0.6 }; // ← 半径を大きく
 
   function drawZones(t){
-    // セーフ
+    // セーフ（等倍スケールでタイル＝縦横比保持）
     const texSafe=IMG.get("zoneSafe");
-    if(texSafe){ const y=H-SAFE_H; ctx.globalAlpha=0.9; ctx.drawImage(texSafe,0,y,W,SAFE_H); ctx.globalAlpha=1; }
-    else { ctx.fillStyle="rgba(20,200,120,0.10)"; ctx.fillRect(0,H-SAFE_H,W,SAFE_H); }
-    // ボーナス
+    if(texSafe){
+      const y=H-SAFE_H;
+      const scale = SAFE_H / texSafe.height;             // 高さ合わせ（縦横比保持）
+      const wScaled = texSafe.width * scale;
+      ctx.globalAlpha=0.95;
+      for(let x=0; x<W+1; x+=wScaled){
+        ctx.drawImage(texSafe, x, y, wScaled, SAFE_H);
+      }
+      ctx.globalAlpha=1;
+    }else{
+      ctx.fillStyle="rgba(20,200,120,0.10)"; ctx.fillRect(0,H-SAFE_H,W,SAFE_H);
+    }
+
+    // ボーナス（大きめ）
     const ang=t*bonus.speed, bx=bonus.cx+Math.cos(ang)*bonus.rOrbit, by=bonus.cy+Math.sin(ang)*bonus.rOrbit;
     const texB=IMG.get("zoneBonus");
-    if(texB){ ctx.save(); ctx.translate(bx,by); ctx.globalAlpha=0.9; ctx.drawImage(texB,-bonus.radius,-bonus.radius,bonus.radius*2,bonus.radius*2); ctx.globalAlpha=1; ctx.restore(); ctx.strokeStyle="rgba(250,210,60,0.25)"; ctx.beginPath(); ctx.arc(bonus.cx,bonus.cy,bonus.rOrbit,0,Math.PI*2); ctx.stroke(); }
-    else { ctx.fillStyle="rgba(250,210,60,0.12)"; ctx.beginPath(); ctx.arc(bx,by,bonus.radius,0,Math.PI*2); ctx.fill(); ctx.strokeStyle="rgba(250,210,60,0.25)"; ctx.beginPath(); ctx.arc(bonus.cx,bonus.cy,bonus.rOrbit,0,Math.PI*2); ctx.stroke(); }
+    if(texB){
+      ctx.save(); ctx.translate(bx,by);
+      ctx.globalAlpha=0.95;
+      ctx.drawImage(texB, -bonus.radius, -bonus.radius, bonus.radius*2, bonus.radius*2);
+      ctx.globalAlpha=1;
+      ctx.restore();
+      ctx.strokeStyle="rgba(250,210,60,0.25)"; ctx.beginPath(); ctx.arc(bonus.cx,bonus.cy,bonus.rOrbit,0,Math.PI*2); ctx.stroke();
+    }else{
+      ctx.fillStyle="rgba(250,210,60,0.12)";
+      ctx.beginPath(); ctx.arc(bx,by,bonus.radius,0,Math.PI*2); ctx.fill();
+      ctx.strokeStyle="rgba(250,210,60,0.25)"; ctx.beginPath(); ctx.arc(bonus.cx,bonus.cy,bonus.rOrbit,0,Math.PI*2); ctx.stroke();
+    }
     return {bx,by};
   }
   function inCircle(px,py,cx,cy,r){ const dx=px-cx, dy=py-cy; return dx*dx+dy*dy <= r*r; }
@@ -223,10 +221,8 @@ async function boot(){
   function drawBG(t){
     const bg=IMG.get("bg");
     if(bg){ const y=(t*40)%H; ctx.drawImage(bg,0,y-H,W,H); ctx.drawImage(bg,0,y,W,H); }
-    else {
-      const g=ctx.createLinearGradient(0,0,0,H); g.addColorStop(0,"#0b1020"); g.addColorStop(1,"#0f1830"); ctx.fillStyle=g; ctx.fillRect(0,0,W,H);
-      ctx.fillStyle="rgba(255,255,255,0.6)"; for(const layer of stars){ for(const p of layer.pts){ p.y += layer.sp*0.016; if(p.y>H) p.y-=H; ctx.fillRect(p.x, p.y, 1.2, 1.2);} }
-    }
+    else { const g=ctx.createLinearGradient(0,0,0,H); g.addColorStop(0,"#0b1020"); g.addColorStop(1,"#0f1830"); ctx.fillStyle=g; ctx.fillRect(0,0,W,H);
+      ctx.fillStyle="rgba(255,255,255,0.6)"; for(const layer of stars){ for(const p of layer.pts){ p.y += layer.sp*0.016; if(p.y>H) p.y-=H; ctx.fillRect(p.x, p.y, 1.2, 1.2);} } }
   }
 
   // ---------- ゲーム状態 ----------
@@ -234,25 +230,38 @@ async function boot(){
   const player={ x:W/2, y:H*0.8, size:26, hitR:10, speed:245, slow:0.5, vx:0, vy:0 };
   let bullets=[], state=TITLE, allowReturnAt=0, timePlay=0, score=0;
 
-  // ---------- 弾（4種） ----------
-  const timers={ rain:0, side:0, ring:0, homing:0, kanji:0 };
+  // ---------- 弾（リング完全廃止） ----------
+  const timers={ rain:0, side:0, homing:0, kanji:0 }; // ← ring を削除
   function randomKanji(){ const s="炎雷風水土空光闇心愛夢星竜鬼斬破護爆迅煌零冥極華刹翔滅砲砕烈煌舞刃閃虎龍雷火光影彗".split(""); return s[(Math.random()*s.length)|0]; }
 
   function spawn(dt){
-    timers.rain+=dt; timers.side+=dt; timers.ring+=dt; timers.homing+=dt; timers.kanji+=dt;
+    timers.rain+=dt; timers.side+=dt; timers.homing+=dt; timers.kanji+=dt;
 
-    if(timers.rain>=0.15){ timers.rain=0; const x=20+Math.random()*(W-40);
-      bullets.push({kind:"normal",x,y:-10,vx:0,vy:140+Math.random()*50,r:6,alive:true}); }
-    if(timers.side>=1.1){ timers.side=0; const L=Math.random()<0.5, y0=60+Math.random()*(H-220);
-      for(let i=0;i<7;i++) bullets.push({kind:"fast",x:L?-10:W+10,y:y0+i*9,vx:L?160:-160,vy:(Math.random()*2-1)*22,r:5,alive:true}); }
-    if(timers.ring>=2.4){ timers.ring=0; const cx=80+Math.random()*(W-160), cy=80+Math.random()*(H-220), n=24, spd=135;
-      for(let i=0;i<n;i++){ const a=i/n*Math.PI*2; bullets.push({kind:"normal",x:cx,y:cy,vx:Math.cos(a)*spd,vy:Math.sin(a)*spd,r:6,alive:true}); } }
-    if(timers.homing>=3.6){ timers.homing=0; const edge=(Math.random()*4)|0; let x=0,y=0;
-      if(edge===0){x=Math.random()*W;y=-10;} if(edge===1){x=W+10;y=Math.random()*H;} if(edge===2){x=Math.random()*W;y=H+10;} if(edge===3){x=-10;y=Math.random()*H;}
+    // 雨（白：遅く）
+    if(timers.rain>=0.15){ timers.rain=0;
+      const x=20+Math.random()*(W-40);
+      bullets.push({kind:"normal",x,y:-10,vx:0,vy:90+Math.random()*30,r:6,alive:true}); // ← 90〜120 に減速
+    }
+    // 横（赤：fast）
+    if(timers.side>=1.1){ timers.side=0;
+      const L=Math.random()<0.5, y0=60+Math.random()*(H-220);
+      for(let i=0;i<7;i++){
+        bullets.push({kind:"fast",x:L?-10:W+10,y:y0+i*9,vx:L?160:-160,vy:(Math.random()*2-1)*22,r:5,alive:true});
+      }
+    }
+    // 誘導（青）
+    if(timers.homing>=3.6){ timers.homing=0;
+      const edge=(Math.random()*4)|0; let x=0,y=0;
+      if(edge===0){x=Math.random()*W;y=-10;} if(edge===1){x=W+10;y=Math.random()*H;}
+      if(edge===2){x=Math.random()*W;y=H+10;} if(edge===3){x=-10;y=Math.random()*H;}
       const ang=Math.atan2(player.y-y, player.x-x), v=145;
-      bullets.push({kind:"homing",x,y,vx:Math.cos(ang)*v,vy:Math.sin(ang)*v,turnDeg:120,r:6,alive:true,homing:true}); }
-    if(timers.kanji>=5.0){ timers.kanji=0; const x=40+Math.random()*(W-80);
-      bullets.push({kind:"big",x,y:-30,vx:0,vy:95,turnDeg:60,r:24,alive:true,text:randomKanji()}); }
+      bullets.push({kind:"homing",x,y,vx:Math.cos(ang)*v,vy:Math.sin(ang)*v,turnDeg:120,r:6,alive:true,homing:true});
+    }
+    // 巨大（漢字風）弾
+    if(timers.kanji>=5.0){ timers.kanji=0;
+      const x=40+Math.random()*(W-80);
+      bullets.push({kind:"big",x,y:-30,vx:0,vy:95,turnDeg:60,r:24,alive:true,text:randomKanji()});
+    }
   }
 
   function update(dt){
@@ -270,18 +279,33 @@ async function boot(){
     // 弾
     spawn(dt);
     for(const b of bullets){
-      if(b.homing){ const angTo=Math.atan2(player.y-b.y, player.x-b.x); const cur=Math.atan2(b.vy,b.vx);
-        const max=(b.turnDeg*Math.PI/180)*dt; let diff=angTo-cur; while(diff>Math.PI) diff-=Math.PI*2; while(diff<-Math.PI) diff+=Math.PI*2;
-        diff=Math.max(-max,Math.min(max,diff)); const next=cur+diff; const sp=Math.hypot(b.vx,b.vy)||145; b.vx=Math.cos(next)*sp; b.vy=Math.sin(next)*sp; }
-      else if(b.kind==="big"){ const angTo=Math.atan2(player.y-b.y, player.x-b.x); const cur=Math.atan2(b.vy,b.vx);
-        const max=(b.turnDeg*Math.PI/180)*dt; let diff=angTo-cur; while(diff>Math.PI) diff-=Math.PI*2; while(diff<-Math.PI) diff+=Math.PI*2;
-        diff=Math.max(-max,Math.min(max,diff)); const next=cur+diff; const sp=Math.hypot(b.vx,b.vy)||110; b.vx=Math.cos(next)*sp; b.vy=Math.sin(next)*sp; }
-      b.x+=b.vx*dt; b.y+=b.vy*dt; if(b.x<-80||b.x>W+80||b.y<-80||b.y>H+80) b.alive=false;
+      if(b.homing){
+        const angTo=Math.atan2(player.y-b.y, player.x-b.x);
+        const cur=Math.atan2(b.vy,b.vx);
+        const max=(b.turnDeg*Math.PI/180)*dt;
+        let diff=angTo-cur; while(diff>Math.PI) diff-=Math.PI*2; while(diff<-Math.PI) diff+=Math.PI*2;
+        diff=Math.max(-max,Math.min(max,diff));
+        const next=cur+diff; const sp=Math.hypot(b.vx,b.vy)||145;
+        b.vx=Math.cos(next)*sp; b.vy=Math.sin(next)*sp;
+      } else if (b.kind==="big"){
+        const angTo=Math.atan2(player.y-b.y, player.x-b.x);
+        const cur=Math.atan2(b.vy,b.vx);
+        const max=(b.turnDeg*Math.PI/180)*dt;
+        let diff=angTo-cur; while(diff>Math.PI) diff-=Math.PI*2; while(diff<-Math.PI) diff+=Math.PI*2;
+        diff=Math.max(-max,Math.min(max,diff));
+        const next=cur+diff; const sp=Math.hypot(b.vx,b.vy)||110;
+        b.vx=Math.cos(next)*sp; b.vy=Math.sin(next)*sp;
+      }
+      b.x+=b.vx*dt; b.y+=b.vy*dt;
+      if(b.x<-80||b.x>W+80||b.y<-80||b.y>H+80) b.alive=false;
     }
     bullets=bullets.filter(b=>b.alive);
 
     // 当たり
-    for(const b of bullets){ const rr=(b.r+player.hitR), dx=b.x-player.x, dy=b.y-player.y; if(dx*dx+dy*dy<=rr*rr) return true; }
+    for(const b of bullets){
+      const rr=(b.r+player.hitR), dx=b.x-player.x, dy=b.y-player.y;
+      if(dx*dx+dy*dy<=rr*rr) return true;
+    }
     return false;
   }
 
@@ -346,14 +370,12 @@ async function boot(){
   let prev=performance.now(), tAccum=0;
   bl("title ready");
 
-  // 初期BGM（タイトル）
   if(!AC) makeAC();
   if(ABUF.size){ bgm.play("title", 400); } else { padCrossTo("title", 400); }
 
   requestAnimationFrame(function loop(ts){
     const dt=Math.min(1/20, Math.max(0,(ts-prev)/1000)); prev=ts; tAccum+=dt;
 
-    // 背景→ゾーン
     drawBG(tAccum);
     const {bx,by}=drawZones(tAccum);
 
