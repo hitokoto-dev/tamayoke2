@@ -25,17 +25,34 @@
   </div>
   <div class="brand">tamayoke2</div>
 
-  <!-- 先にバージョンと rank API を“明示的に”公開スコープへ -->
+  <!-- 1) 先に V と ランキングの endpoint を公開スコープへ -->
   <script>
-    const V = "rank-20250825-12";                     /* ★更新して保存 */
-    window.V = V;                                     /* main.js が参照 */
-    window.RANK_ENDPOINT =
-      "https://script.google.com/macros/s/AKfycbxvQ-miSQfyYy2fEmeNstkb-WiHMtTeuJjl2KzuklxYc1UOeytF6F-O1KX1waNZ8QUO2w/exec";
+    const V = "rank-20250825-13";    /* ★更新して保存（キャッシュ破り） */
+    window.V = V;
+    window.RANK_ENDPOINT = "https://script.google.com/macros/s/AKfycbxvQ-miSQfyYy2fEmeNstkb-WiHMtTeuJjl2KzuklxYc1UOeytF6F-O1KX1waNZ8QUO2w/exec";
   </script>
 
-  <!-- 本体のモジュール読み込み -->
+  <!-- 2) ゲーム本体 -->
   <script type="module">
-    import "./js/main.js?v=" + encodeURIComponent(window.V);
+    import "./js/main.js?v="+encodeURIComponent(window.V);
+  </script>
+
+  <!-- 3) ランキングを“強制で”読み込んで右上を書き換える（main.jsに依存しない） -->
+  <script type="module">
+    import { Rank, renderLeaderboard } from "./js/rank.js?v="+encodeURIComponent(window.V);
+    const ep = (window.RANK_ENDPOINT || "").trim();
+    const lb = document.getElementById("ui-leaderboard");
+    if (ep) {
+      const rank = new Rank(ep);       // endpoint が空でも「未設定」にしない
+      // まず「LOADING…」を出す
+      lb.textContent = "LOADING...";
+      try {
+        await renderLeaderboard(rank, lb);
+      } catch (e) {
+        console.error(e);
+        lb.textContent = "通信エラー";
+      }
+    }
   </script>
 </body>
 </html>
