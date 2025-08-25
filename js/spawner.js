@@ -1,120 +1,129 @@
-// spawner.js — パターン発生＆難易度スケール（巨大漢字弾対応）
-import { Bullet, BULLET_TYPES, KanjiBullet } from "./bullets.js";
+// spawner.js
+import { NormalBullet, FastBullet, HomingBullet, KanjiBullet } from "./bullets.js";
 
 export class Spawner {
   constructor(config) {
-    this.cfg = config;
-    this.t = 0;
-    this.timers = { rain: 0, side: 0, fan: 0, ring: 0, kanji: 0 };
-    this.kanjiIdx = 0; // リストを巡回
-    // 追加：tuning
-    const t = this.cfg.tuning || {};
-    this.speedScale = (typeof t.bulletSpeedScale === "number") ? t.bulletSpeedScale : 1.0;
-    this.countScale = (typeof t.bulletCountScale === "number") ? t.bulletCountScale : 1.0;
+    this.c = config;
+    this.t = {
+      row: 0, sine: 0, rain: 0, side: 0, fan: 0, ring: 0, kanji: 0, homing: 0
+    };
+    this.paused = false;
+    this.active = true;
   }
 
   reset() {
-    this.t = 0;
-    this.timers.rain = this.timers.side = this.timers.fan = this.timers.ring = this.timers.kanji = 0;
-  }
-
-  _coeff(time) {
-    const base = this.cfg.difficulty.base;
-    const gain = this.cfg.difficulty.gainPerSec;
-    const caps = this.cfg.difficulty.caps;
-    const d = base + Math.max(0, time - this.cfg.graceSec) * gain;
-
-    const baseSpeedMul = Math.min(caps.speedMul, 1 + (d - base));
-    const baseCountMul = Math.min(caps.countMul, 1 + 0.6 * (d - base));
-    const speedMul = Math.min(baseSpeedMul * this.speedScale, caps.speedMul * this.speedScale);
-    const countMul = Math.min(baseCountMul * this.countScale, caps.countMul * this.countScale);
-    return { d, speedMul, countMul };
+    for (const k of Object.keys(this.t)) this.t[k] = 0;
+    this.paused = false;
+    this.active  = true;
   }
 
   update(dt, time, bullets, player) {
-    this.t += dt;
+    if (this.paused || !this.active) return;
 
-    // GRACE中もタイマー進行
-    for (const k of Object.keys(this.timers)) this.timers[k] += dt;
-    if (time < this.cfg.graceSec) return;
+    // 難易度
+    const dcfg = this.c.difficulty;
+    const diff = (dcfg.base || 0.6) + Math.max(0, time - 3) * (dcfg.gainPerSec || 0.08);
+    const speedMul = Math.min(1 + diff * 0.5, dcfg.caps?.speedMul ?? 2.0);
+    const countMul = Math.min(1 + diff * 0.35, dcfg.caps?.countMul ?? 1.6);
 
-    const { speedMul, countMul } = this._coeff(time);
-    const W = this.cfg.logicSize.w, H = this.cfg.logicSize.h;
-    const hitR = this.cfg.bullets.hitR;
-    const ev = this.cfg.spawns;
+    // 共通
+    const W = this.c.logicSize.w, H = this.c.logicSize.h;
+    const baseSpeed = 160 * (this.c.tuning?.bulletSpeedScale ?? 1); // 白い球は0.7倍（config）
+    const fastSpeed = 260 * speedMul;          // 赤：速い
+    const homingSpeed = 140 * speedMul;        // 青：誘導
+    const kanjiSpeed = 120 * speedMul;         // 巨大漢字弾
 
-    // --- 小雨
-    while (this.timers.rain >= ev.rainEvery) {
-      this.timers.rain -= ev.rainEvery;
-      const n = Math.max(1, Math.round(4 * countMul));
+    // タイマ進行
+    for (const k of Object.keys(this.t)) this.t[k] += dt;
+
+    // 1) 小雨（上から点在）
+    if (this.t.rain >= (this.c.spawns.rainEvery || 3.8)) {
+      this.t.rain = 0;
+      const n = Math.round(4 * countMul);
       for (let i = 0; i < n; i++) {
-        const x = 40 + Math.random() * (W - 80);
-        const y = -20 - Math.random() * 60;
-        const spd = 160 * speedMul;
-        bullets.push(new Bullet({
-          type: BULLET_TYPES.NORMAL, x, y, vx: 0, vy: spd, r: 9, hitR
-        }));
+        const x = 20 + Math.random() * (W - 40);
+        const y = -20 - Math.random() * 30;
+        const vx = 0, vy = (baseSpeed + Math.random() * 40) * speedMul;
+        bullets.push(new NormalBullet(x, y, vx, vy, this.c.bullets.hitR));
       }
     }
 
-    // --- 横から直線
-    while (this.timers.side >= ev.sideEvery) {
-      this.timers.side -= ev.sideEvery;
+    // 2) 横から直線
+    if (this.t.side >= (this.c.spawns.sideEvery || 1.8)) {
+      this.t.side = 0;
       const fromLeft = Math.random() < 0.5;
-      const n = Math.max(1, Math.round(6 * countMul));
+      const y = 40 + Math.random() * (H - 160);
+      const n = Math.round(6 * countMul);
       for (let i = 0; i < n; i++) {
-        const y = 60 + Math.random() * (H - 120);
-        const spd = 220 * speedMul;
-        const vx = fromLeft ? +spd : -spd;
-        const type = (i % 3 === 0) ? BULLET_TYPES.FAST : BULLET_TYPES.NORMAL;
-        const r = (type === BULLET_TYPES.FAST ? 7 : 9);
-        const x = fromLeft ? -20 : W + 20;
-        bullets.push(new Bullet({ type, x, y, vx, vy: 0, r, hitR }));
+        const x = fromLeft ? -20 - i * 14 : W + 20 + i * 14;
+        const vx = (fromLeft ? 1 : -1) * baseSpeed * 0.9 * speedMul;
+        bullets.push(new NormalBullet(x, y, vx, 0, this.c.bullets.hitR));
       }
     }
 
-    // --- 横から扇
-    while (this.timers.fan >= ev.fanEvery) {
-      this.timers.fan -= ev.fanEvery;
+    // 3) 横から扇
+    if (this.t.fan >= (this.c.spawns.fanEvery || 3.2)) {
+      this.t.fan = 0;
       const fromLeft = Math.random() < 0.5;
-      const baseY = H * (0.25 + 0.5 * Math.random());
-      const n = Math.max(5, Math.round(7 * countMul));
+      const x0 = fromLeft ? -20 : W + 20;
+      const y0 = H * (0.3 + Math.random() * 0.4);
+      const n = Math.round(7 * countMul);
       for (let i = 0; i < n; i++) {
-        const t = (i / (n - 1)) - 0.5;
-        const ang = (fromLeft ? 0 : Math.PI) + t * (Math.PI / 4);
-        const spd = 200 * speedMul;
-        const vx = Math.cos(ang) * spd;
-        const vy = Math.sin(ang) * spd;
-        const x = fromLeft ? -20 : W + 20;
-        bullets.push(new Bullet({
-          type: BULLET_TYPES.NORMAL, x, y: baseY, vx, vy, r: 9, hitR
-        }));
+        const ang = (fromLeft ? 0 : Math.PI) + (i - (n - 1) / 2) * (Math.PI / 16);
+        const vx = Math.cos(ang) * baseSpeed * speedMul;
+        const vy = Math.sin(ang) * baseSpeed * speedMul;
+        bullets.push(new NormalBullet(x0, y0, vx, vy, this.c.bullets.hitR));
       }
     }
 
-    // --- 巨大漢字弾（5秒ごと1発／速度120・最大旋回15°/s・常に自機狙い）
-    while (this.timers.kanji >= ev.kanjiEvery) {
-      this.timers.kanji -= ev.kanjiEvery;
-      const list = this.cfg.kanji?.list || [{k:"漢字", f:"かんじ"}];
-      const pick = list[this.kanjiIdx % list.length]; this.kanjiIdx++;
+    // 4) リング
+    if (this.t.ring >= (this.c.spawns.ringEvery || 9.0)) {
+      this.t.ring = 0;
+      const cx = W * (0.25 + Math.random() * 0.5);
+      const cy = H * (0.3 + Math.random() * 0.4);
+      const n = Math.round(26 * countMul);
+      for (let i = 0; i < n; i++) {
+        const ang = (i / n) * (Math.PI * 2);
+        const vx = Math.cos(ang) * baseSpeed * 0.9 * speedMul;
+        const vy = Math.sin(ang) * baseSpeed * 0.9 * speedMul;
+        bullets.push(new NormalBullet(cx, cy, vx, vy, this.c.bullets.hitR));
+      }
+    }
 
-      const r = this.cfg.kanji?.visualR || 84;      // 見た目半径
-      const spd = 120 * speedMul;
-      const x = 80 + Math.random() * (W - 160);     // 上から出す（左右端を少し空ける）
-      const y = -r - 10;
+    // 5) 赤い球（数を減らす：ファストは低頻度）
+    if (this.t.row >= (this.c.spawns.rowEvery || 6.6)) {
+      this.t.row = 0;
+      // 少数のみ
+      const n = Math.max(2, Math.round(3 * (countMul * 0.6)));
+      const y = 60 + Math.random() * (H - 120);
+      for (let i = 0; i < n; i++) {
+        const x = 40 + i * (W / (n + 1));
+        const vx = (Math.random() < 0.5 ? -1 : 1) * fastSpeed;
+        const vy = (Math.random() - 0.5) * 40;
+        bullets.push(new FastBullet(x, y, vx, vy, this.c.bullets.hitR));
+      }
+    }
 
-      const dx = (player?.x || W/2) - x;
-      const dy = (player?.y || H/2) - y;
-      const m = Math.hypot(dx, dy) || 1;
-      const vx = (dx / m) * spd;
-      const vy = (dy / m) * spd;
+    // 6) 誘導弾（青）
+    if (this.t.homing >= (this.c.spawns.homingEvery || 4.5)) {
+      this.t.homing = 0;
+      const side = Math.random() < 0.5 ? -1 : 1;
+      const x = side < 0 ? -24 : W + 24;
+      const y = 60 + Math.random() * (H - 120);
+      const vx = side < 0 ? homingSpeed : -homingSpeed;
+      bullets.push(new HomingBullet(x, y, vx, 0, this.c.bullets.hitR, 200));
+    }
 
-      bullets.push(new KanjiBullet({
-        x, y, vx, vy, r,
-        hitR,
-        k: pick.k, f: pick.f,
-        kanjiCfg: this.cfg.kanji || {}
-      }));
+    // 7) 巨大漢字弾（常にプレイヤー狙い／5sごと）
+    if (this.t.kanji >= (this.c.spawns.kanjiEvery || 5.0)) {
+      this.t.kanji = 0;
+      const edge = Math.floor(Math.random() * 4); // 0:上 1:右 2:下 3:左
+      let x = 0, y = 0;
+      if (edge === 0) { x = Math.random()*W; y = -40; }
+      if (edge === 1) { x = W + 40; y = Math.random()*H; }
+      if (edge === 2) { x = Math.random()*W; y = H + 40; }
+      if (edge === 3) { x = -40; y = Math.random()*H; }
+      bullets.push(new KanjiBullet(x, y, kanjiSpeed, player, this.c.kanji));
     }
   }
 }
