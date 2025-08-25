@@ -4,7 +4,6 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>tamayoke2</title>
-  <!-- フォント -->
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700&family=Noto+Sans+JP:wght@400;700&display=swap" rel="stylesheet">
   <style>
@@ -17,21 +16,26 @@
       font:14px "Orbitron",monospace;white-space:pre;overflow:auto;
     }
     .brand{position:fixed;left:12px;bottom:12px;font:12px monospace;color:#9cf;}
+    /* 診断用オーバーレイ */
+    #diag{
+      position:fixed;left:12px;top:12px;z-index:9;
+      background:rgba(0,0,0,.5);border:1px solid #345;padding:6px 8px;
+      font:12px/1.4 monospace;white-space:pre-wrap;max-width:48vw;max-height:60vh;overflow:auto;
+    }
   </style>
 </head>
 <body>
   <div id="stage">
-    <!-- ★ main.js が参照するキャンバス -->
     <canvas id="g" width="960" height="540"></canvas>
-    <!-- ★ タイトル右側のランキング表示枠 -->
     <pre id="ui-leaderboard" class="leaderboard">未設定</pre>
   </div>
+  <div id="diag">boot…</div>
   <div class="brand">tamayoke2</div>
 
-  <!-- moduleブート（キャッシュ破りは V で） -->
   <script type="module">
-    const V = "hotfix-20250825-1";            // ←★更新して保存
-    window.V = V;                            // main.js が参照
+    // ★毎回更新してキャッシュ破り
+    const V = "diag-20250825-2";
+    window.V = V;
     import "./js/main.js?v="+encodeURIComponent(V);
   </script>
 </body>
