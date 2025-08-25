@@ -1,15 +1,9 @@
 {
   "logicSize": { "w": 960, "h": 540 },
   "graceSec": 3,
-
   "player": { "speed": 280, "slow": 120, "size": 56, "hitR": 4, "sprite": "assets/img/player.png" },
-
   "bullets": { "baseR": 9, "hitR": 3, "outline": true },
-
-  "tuning": {
-    "bulletSpeedScale": 0.7
-  },
-
+  "tuning": { "bulletSpeedScale": 0.7 },
   "spawns": {
     "rowEvery": 6.6,
     "sineEvery": 12.0,
@@ -20,14 +14,7 @@
     "kanjiEvery": 5.0,
     "homingEvery": 4.5
   },
-
-  "background": {
-    "image": "assets/img/bg_mechcity_loop.png",
-    "scrollSpeed": 40,
-    "loop": true,
-    "height": 1080
-  },
-
+  "background": { "image": "assets/img/bg_mechcity_loop.png", "scrollSpeed": 40, "loop": true, "height": 1080 },
   "zones": {
     "safeH": 36,
     "safeCols": 4,
@@ -39,73 +26,60 @@
       "limitToPlayArea": true
     }
   },
-
   "kanji": {
-    "visualR": 84, "rubyColor": "#f00", "maxR": 96,
-    "paddingRate": 0.12, "rubyRate": 0.28, "lineGapRate": 0.16,
+    "visualR": 84,
+    "rubyColor": "#f00",
+    "maxR": 96,
+    "paddingRate": 0.12,
+    "rubyRate": 0.28,
+    "lineGapRate": 0.16,
     "list": [
       { "k": "雰囲気", "f": "ふんいき" },
-      { "k": "早急",   "f": "さっきゅう" },
-      { "k": "重複",   "f": "ちょうふく" }
+      { "k": "早急", "f": "さっきゅう" },
+      { "k": "重複", "f": "ちょうふく" }
     ]
   },
-
-  "score": {
-    "perSec": 100, "bonusPerSec": 1000, "penaltyPerSec": 1000, "milestone": 2000
-  },
-
+  "score": { "perSec": 100, "bonusPerSec": 1000, "penaltyPerSec": 1000, "milestone": 2000 },
   "rank": [
-    { "name": "Bronze",   "min": 10000,  "medal": "assets/img/medal_bronze.png"   },
-    { "name": "Silver",   "min": 30000,  "medal": "assets/img/medal_silver.png"   },
-    { "name": "Gold",     "min": 60000,  "medal": "assets/img/medal_gold.png"     },
+    { "name": "Bronze", "min": 10000, "medal": "assets/img/medal_bronze.png" },
+    { "name": "Silver", "min": 30000, "medal": "assets/img/medal_silver.png" },
+    { "name": "Gold", "min": 60000, "medal": "assets/img/medal_gold.png" },
     { "name": "Platinum", "min": 100000, "medal": "assets/img/medal_platinum.png" },
-    { "name": "Diamond",  "min": 150000, "medal": "assets/img/medal_diamond.png"  }
+    { "name": "Diamond", "min": 150000, "medal": "assets/img/medal_diamond.png" }
   ],
-
   "audio": {
     "volumes": { "master": 0.8, "bgm": 0.5, "sfx": 0.9 },
     "crossfadeMs": 400,
     "bgm": {
-      "normal":  { "src": ["assets/audio/bgm_stage1.ogg",  "assets/audio/bgm_stage1.mp3"],  "loopStart": 0.8, "loopEnd": 12.8 },
-      "bonus":   { "src": ["assets/audio/bgm_stage1.ogg",  "assets/audio/bgm_stage1.mp3"],  "loopStart": 8.8, "loopEnd": 20.8 },
-      "safe":    { "src": ["assets/audio/bgm_title.ogg",   "assets/audio/bgm_title.mp3"],   "loopStart": 1.6, "loopEnd": 18.4 },
-      "gameover":{ "src": ["assets/audio/bgm_result.ogg",  "assets/audio/bgm_result.mp3"], "loop": false, "loopStart": 0, "loopEnd": 0 }
+      "normal": { "src": ["assets/audio/bgm_stage1.ogg", "assets/audio/bgm_stage1.mp3"], "loopStart": 0.8, "loopEnd": 12.8 },
+      "bonus": { "src": ["assets/audio/bgm_stage1.ogg", "assets/audio/bgm_stage1.mp3"], "loopStart": 8.8, "loopEnd": 20.8 },
+      "safe": { "src": ["assets/audio/bgm_title.ogg", "assets/audio/bgm_title.mp3"], "loopStart": 1.6, "loopEnd": 18.4 },
+      "gameover": { "src": ["assets/audio/bgm_result.ogg", "assets/audio/bgm_result.mp3"], "loop": false, "loopStart": 0, "loopEnd": 0 }
     },
     "sfx": {
-      "start":      ["assets/audio/sfx_start.ogg",      "assets/audio/sfx_start.mp3"],
-      "pause":      ["assets/audio/sfx_pause.ogg",      "assets/audio/sfx_pause.mp3"],
-      "milestone":  ["assets/audio/sfx_milestone.ogg",  "assets/audio/sfx_milestone.mp3"],
-      "zone_safe":  ["assets/audio/sfx_zone_safe.ogg",  "assets/audio/sfx_zone_safe.mp3"],
+      "start": ["assets/audio/sfx_start.ogg", "assets/audio/sfx_start.mp3"],
+      "pause": ["assets/audio/sfx_pause.ogg", "assets/audio/sfx_pause.mp3"],
+      "milestone": ["assets/audio/sfx_milestone.ogg", "assets/audio/sfx_milestone.mp3"],
+      "zone_safe": ["assets/audio/sfx_zone_safe.ogg", "assets/audio/sfx_zone_safe.mp3"],
       "zone_bonus": ["assets/audio/sfx_zone_bonus.ogg", "assets/audio/sfx_zone_bonus.mp3"],
-      "zone_normal":["assets/audio/sfx_zone_normal.ogg","assets/audio/sfx_zone_normal.mp3"],
-      "explode":    ["assets/audio/sfx_explode.ogg",    "assets/audio/sfx_explode.mp3"]
+      "zone_normal": ["assets/audio/sfx_zone_normal.ogg", "assets/audio/sfx_zone_normal.mp3"],
+      "explode": ["assets/audio/sfx_explode.ogg", "assets/audio/sfx_explode.mp3"]
     }
   },
-
   "ui": {
-    "sprites": {
-      "safe":  "assets/img/zone_safe.png",
-      "bonus": "assets/img/zone_bonus.png"
-    },
+    "sprites": { "safe": "assets/img/zone_safe.png", "bonus": "assets/img/zone_bonus.png" },
     "nineSlice": { "safe": { "left": 8, "right": 8, "top": 6, "bottom": 6 } },
     "font": {
-      "digitsFamily": "Orbitron", "digitsWeight": 700, "digitsSize": 28,
-      "normalColor": "#66aaff", "bonusColor": "#ffd84a", "penaltyColor":"#ff4040",
+      "digitsFamily": "Orbitron",
+      "digitsWeight": 700,
+      "digitsSize": 28,
+      "normalColor": "#66aaff",
+      "bonusColor": "#ffd84a",
+      "penaltyColor": "#ff4040",
       "shadow": { "color": "#001a33", "blur": 4, "offsetX": 2, "offsetY": 2 }
     },
-    "positions": {
-      "score": { "xFromRight": 12, "y": 12 },
-      "best":  { "x": 12, "y": 40 },
-      "time":  { "x": 12, "y": 58 }
-    }
+    "positions": { "score": { "xFromRight": 12, "y": 12 }, "best": { "x": 12, "y": 40 }, "time": { "x": 12, "y": 58 } }
   },
-
-  "difficulty": {
-    "base": 0.6, "gainPerSec": 0.08,
-    "caps": { "speedMul": 2.0, "countMul": 1.6 }
-  },
-
-  "rankApi": {
-    "endpoint": ""  // ここにGASの公開URL（/exec）を入れるとランキングが有効になります
-  }
+  "difficulty": { "base": 0.6, "gainPerSec": 0.08, "caps": { "speedMul": 2.0, "countMul": 1.6 } },
+  "rankApi": { "endpoint": "" }
 }
