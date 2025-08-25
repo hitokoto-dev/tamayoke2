@@ -83,3 +83,8 @@
   "difficulty": { "base": 0.6, "gainPerSec": 0.08, "caps": { "speedMul": 2.0, "countMul": 1.6 } },
   "rankApi": { "endpoint": "" }
 }
+{
+  "rankApi": {
+    "endpoint": "https://script.google.com/macros/s/【あなたの/exec】/exec"
+  }
+}
