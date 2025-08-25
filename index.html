@@ -1,58 +1,113 @@
-<!doctype html>
-<html lang="ja">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>tamayoke2</title>
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700&family=Noto+Sans+JP:wght@400;700&display=swap" rel="stylesheet">
-  <style>
-    html,body{height:100%;margin:0;background:#0a0f1f;color:#fff;font-family:"Noto Sans JP",sans-serif;}
-    #stage{position:relative;height:100vh;display:flex;align-items:center;justify-content:center;}
-    canvas#g{image-rendering:pixelated;box-shadow:0 0 0 1px #223;}
-    .leaderboard{
-      position:absolute;top:12px;right:12px;width:240px;height:220px;padding:8px;
-      border:1px solid #334;background:rgba(0,0,0,.35);
-      font:14px "Orbitron",monospace;white-space:pre;overflow:auto;
-    }
-    .brand{position:fixed;left:12px;bottom:12px;font:12px monospace;color:#9cf;}
-  </style>
-</head>
-<body>
-  <div id="stage">
-    <canvas id="g" width="960" height="540"></canvas>
-    <pre id="ui-leaderboard" class="leaderboard">未設定</pre>
-  </div>
-  <div class="brand">tamayoke2</div>
+// js/safe_main.js — 依存ゼロのセーフモード（描画とプレイだけ）
+const W=960, H=540;
+const TITLE="title", PLAY="play", OVER="over";
 
-  <!-- 1) 先に V と ランキングの endpoint を公開スコープへ -->
-  <script>
-    const V = "rank-20250825-13";    /* ★更新して保存（キャッシュ破り） */
-    window.V = V;
-    window.RANK_ENDPOINT = "https://script.google.com/macros/s/AKfycbxvQ-miSQfyYy2fEmeNstkb-WiHMtTeuJjl2KzuklxYc1UOeytF6F-O1KX1waNZ8QUO2w/exec";
-  </script>
+// ----- DOM -----
+await (document.readyState==="loading" ? new Promise(r=>document.addEventListener("DOMContentLoaded",r,{once:true})) : 0);
+let canvas = document.getElementById("g");
+if(!canvas){ canvas=document.createElement("canvas"); canvas.id="g"; canvas.width=W; canvas.height=H; (document.getElementById("stage")||document.body).appendChild(canvas); }
+const ctx = canvas.getContext("2d");
+function fit(){ const s=Math.min(innerWidth/W, innerHeight/H); canvas.style.width=`${(W*s)|0}px`; canvas.style.height=`${(H*s)|0}px`; }
+addEventListener("resize",fit); fit();
 
-  <!-- 2) ゲーム本体 -->
-  <script type="module">
-    import "./js/main.js?v="+encodeURIComponent(window.V);
-  </script>
+// ----- 入力 -----
+const keys=new Set(); let pointerDown=false, pointerX=W/2, pointerY=H*0.75;
+addEventListener("keydown",e=>{ if(!e.repeat) keys.add(e.key); if(["ArrowUp","ArrowDown","ArrowLeft","ArrowRight"," "].includes(e.key)) e.preventDefault(); });
+addEventListener("keyup",e=>keys.delete(e.key));
+function cpos(e){ const r=canvas.getBoundingClientRect(); return {x:(e.clientX-r.left)*W/r.width, y:(e.clientY-r.top)*H/r.height}; }
+canvas.addEventListener("pointerdown",e=>{ pointerDown=true; const p=cpos(e); pointerX=p.x; pointerY=p.y; });
+addEventListener("pointerup",()=> pointerDown=false);
+canvas.addEventListener("pointermove",e=>{ if(!pointerDown) return; const p=cpos(e); pointerX=p.x; pointerY=p.y; });
 
-  <!-- 3) ランキングを“強制で”読み込んで右上を書き換える（main.jsに依存しない） -->
-  <script type="module">
-    import { Rank, renderLeaderboard } from "./js/rank.js?v="+encodeURIComponent(window.V);
-    const ep = (window.RANK_ENDPOINT || "").trim();
-    const lb = document.getElementById("ui-leaderboard");
-    if (ep) {
-      const rank = new Rank(ep);       // endpoint が空でも「未設定」にしない
-      // まず「LOADING…」を出す
-      lb.textContent = "LOADING...";
-      try {
-        await renderLeaderboard(rank, lb);
-      } catch (e) {
-        console.error(e);
-        lb.textContent = "通信エラー";
-      }
-    }
-  </script>
-</body>
-</html>
+// ----- ゲーム状態 -----
+const player={ x:W/2, y:H*0.8, size:24, hitR:10, speed:240, slow:0.5 };
+let state=TITLE, allowReturnAt=0, time=0, score=0, bullets=[];
+
+// 簡易弾（円）
+function spawnSimple(now){
+  // 上から雨
+  if ((now*2|0)%1===0 && Math.random()<0.06){
+    const x = 20 + Math.random()*(W-40);
+    bullets.push({x, y:-10, vx:0, vy:120+Math.random()*60, r:6, alive:true});
+  }
+  // 横からトゲ
+  if (Math.random()<0.02){
+    const left = Math.random()<0.5, y=40+Math.random()*(H-200);
+    bullets.push({x:left?-10:W+10, y, vx:left?160:-160, vy:(Math.random()*2-1)*20, r:6, alive:true});
+  }
+}
+
+function update(dt){
+  // プレイヤー移動
+  let dx=0,dy=0;
+  if(keys.has("ArrowLeft")||keys.has("a")||keys.has("A")) dx-=1;
+  if(keys.has("ArrowRight")||keys.has("d")||keys.has("D")) dx+=1;
+  if(keys.has("ArrowUp")||keys.has("w")||keys.has("W")) dy-=1;
+  if(keys.has("ArrowDown")||keys.has("s")||keys.has("S")) dy+=1;
+  if(pointerDown){ player.x+=(pointerX-player.x)*0.35; player.y+=(pointerY-player.y)*0.35; }
+  else if(dx||dy){ const len=Math.hypot(dx,dy)||1; const v=player.speed*((keys.has("Shift")||keys.has(" "))?player.slow:1); player.x+=(dx/len)*v*dt; player.y+=(dy/len)*v*dt; }
+  player.x=Math.max(0,Math.min(W,player.x)); player.y=Math.max(0,Math.min(H,player.y));
+
+  // 弾
+  spawnSimple(time);
+  for(const b of bullets){ b.x+=b.vx*dt; b.y+=b.vy*dt; if(b.x<-40||b.x>W+40||b.y<-40||b.y>H+40) b.alive=false; }
+  bullets = bullets.filter(b=>b.alive);
+
+  // 当たり
+  for(const b of bullets){ const rr=(b.r+player.hitR); const dx=b.x-player.x, dy=b.y-player.y; if(dx*dx+dy*dy<=rr*rr){ return true; } }
+  return false;
+}
+
+function drawBG(){
+  const g=ctx.createLinearGradient(0,0,0,H); g.addColorStop(0,"#0b1020"); g.addColorStop(1,"#101a35");
+  ctx.fillStyle=g; ctx.fillRect(0,0,W,H);
+  // 下部セーフゾーン
+  ctx.fillStyle="rgba(20,200,120,0.10)";
+  ctx.fillRect(0, H-90, W, 90);
+}
+
+function draw(){
+  drawBG();
+  if(state===TITLE){
+    ctx.fillStyle="#fff"; ctx.textAlign="center"; ctx.textBaseline="middle";
+    ctx.font="48px Orbitron, sans-serif"; ctx.fillText("TAMAYOKE 2", W/2, H*0.36);
+    ctx.font="18px Noto Sans JP, sans-serif"; ctx.fillText("クリック／Enter でスタート", W/2, H*0.36+56);
+  }else{
+    // bullets
+    ctx.fillStyle="#fff";
+    for(const b of bullets){ ctx.beginPath(); ctx.arc(b.x,b.y,b.r,0,Math.PI*2); ctx.fill(); }
+    // player
+    ctx.save(); ctx.translate(player.x,player.y);
+    ctx.fillStyle="#4cf"; const s=player.size;
+    ctx.beginPath(); ctx.moveTo(0,-s); ctx.lineTo(s*0.7,0); ctx.lineTo(0,s); ctx.lineTo(-s*0.7,0); ctx.closePath(); ctx.fill();
+    ctx.strokeStyle="rgba(255,255,255,0.35)"; ctx.beginPath(); ctx.arc(0,0,player.hitR,0,Math.PI*2); ctx.stroke();
+    ctx.restore();
+    // score
+    const str=String(score|0).padStart(6,"0");
+    ctx.font="20px Orbitron, monospace"; ctx.textAlign="right"; ctx.textBaseline="top"; ctx.fillStyle="#fff";
+    ctx.fillText(`SCORE  ${str}`, W-16, 12);
+  }
+  if(state===OVER){
+    ctx.font="46px Orbitron, sans-serif"; ctx.textAlign="center"; ctx.textBaseline="middle"; ctx.fillStyle="#ff9";
+    ctx.fillText("GAME OVER", W/2, H*0.35);
+    ctx.font="18px Noto Sans JP, sans-serif"; ctx.fillStyle="#fff";
+    ctx.fillText("0.7秒後に クリック／Enter でタイトルへ", W/2, H*0.35+50);
+  }
+}
+
+let prev=performance.now();
+function loop(ts){
+  const dt=Math.min(1/20, Math.max(0,(ts-prev)/1000)); prev=ts;
+  if(state===TITLE){
+    if(keys.has("Enter")||pointerDown){ state=PLAY; pointerDown=false; time=0; score=0; bullets.length=0; }
+  }else if(state===PLAY){
+    time+=dt; score += 10*dt;
+    const hit = update(dt);
+    if(hit){ state=OVER; allowReturnAt=performance.now()+700; bullets.length=0; }
+  }else if(state===OVER){
+    if(performance.now()>=allowReturnAt && (keys.has("Enter")||pointerDown)){ pointerDown=false; state=TITLE; }
+  }
+  draw();
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
