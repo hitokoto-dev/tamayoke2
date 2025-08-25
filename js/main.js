@@ -27,6 +27,9 @@ export async function boot(conf, V = "") {
   let last = 0, gameTime = 0, score = 0, bgY = 0;
   let bgImg = null, unlocked = false, bullets = [], showDebug = false;
 
+  // ★ ゲームオーバー用（0.7 秒の再スタート遅延）
+  let restartAt = 0;
+
   // ローカル保存
   let bestScore = Number(localStorage.getItem("bestScore") || 0);
   let playerName = localStorage.getItem("playerName") || "";
@@ -58,6 +61,7 @@ export async function boot(conf, V = "") {
   function drawBG(dt) {
     const speed = config.background.scrollSpeed;
     const loopH = config.background.height;
+    // ★ 下方向へ流れるように（逆方向修正済み）
     bgY = (bgY - speed * dt + loopH) % loopH;
     const half = loopH / 2;
     const y1 = Math.floor(-bgY / 2);
@@ -149,7 +153,13 @@ export async function boot(conf, V = "") {
       g.textAlign = "center";
       g.fillText("GAME OVER", W/2, H/2 - 10);
       g.font = "400 16px Noto Sans JP, system-ui";
-      g.fillText("タップでタイトルへ", W/2, H/2 + 20);
+      // 0.7s 経過後のみ再開案内
+      const now = performance.now() / 1000;
+      if (now >= restartAt) {
+        g.fillText("タップ / Space / Enter でタイトルへ", W/2, H/2 + 20);
+      } else {
+        g.fillText("…", W/2, H/2 + 20);
+      }
     }
 
     if (showDebug) {
@@ -163,23 +173,24 @@ export async function boot(conf, V = "") {
     }
   }
 
-  function setupInput() {
-    input = new Input(canvas);
-    const onTap = async () => {
-      if (!unlocked) { await aud.unlock(); unlocked = true; }
-      if (state === "gameover") { toTitle(); return; }
-      if (state === "title") startGame();
-    };
-    canvas.addEventListener("pointerdown", onTap, { passive: true });
+  // ===== 入力 =====
+  function canRestartNow() {
+    return performance.now() / 1000 >= restartAt;
+  }
+  function onTapOrStart() {
+    if (!unlocked) { aud.unlock().catch(()=>{}); unlocked = true; }
+    if (state === "title") startGame();
+    else if (state === "gameover" && canRestartNow()) toTitle();
+  }
+  function onKey(e) {
+    if (e.key === "F2") showDebug = !showDebug;
+    if (state === "title" && (e.key === "Enter" || e.code === "Space")) startGame();
+    if (state === "gameover" && (e.key === "Enter" || e.code === "Space") && canRestartNow()) toTitle();
 
-    addEventListener("keydown", (e) => {
-      if (e.key === "Enter" && state === "title") startGame();
-      if (e.key === "Escape" && state === "gameover") toTitle();
-      if (e.key === "F2") showDebug = !showDebug;
-      if (e.key === "s" && isPlaying()) { state = "safe";  aud.playBgm("safe"); }
-      if (e.key === "b" && isPlaying()) { state = "bonus"; aud.playBgm("bonus"); }
-      if (e.key === "g" && isPlaying()) { gameOver(); }
-    });
+    // デバッグキー
+    if (isPlaying() && e.key === "s") { state = "safe";  aud.playBgm("safe"); }
+    if (isPlaying() && e.key === "b") { state = "bonus"; aud.playBgm("bonus"); }
+    if (isPlaying() && e.key === "g") { gameOver(); }
   }
 
   function startGame() {
@@ -192,9 +203,11 @@ export async function boot(conf, V = "") {
   function toTitle() {
     state = "title";
     bullets = [];
+    // タイトルBGM（仕様に合わせて safe を使用）
     aud.playBgm("safe");
     refreshTop(); // タイトルに戻ったらTop10を取り直す
   }
+
   async function maybeSubmitBest(newScore) {
     if (!rankClient.enabled) return;
     try {
@@ -211,10 +224,19 @@ export async function boot(conf, V = "") {
       console.warn("[rank] submit error:", e);
     }
   }
+
   function gameOver() {
+    // ★ 既に gameover なら何もしない
+    if (state === "gameover") return;
+
     state = "gameover";
+    restartAt = performance.now() / 1000 + 0.7; // ★ 0.7s 後からタイトルへ戻れる
     aud.playBgm("gameover");
     if (config.audio?.sfx?.explode) aud.playSfx(config.audio.sfx.explode);
+
+    // ★ 画面上の弾をクリア & スポーン休止（updateBullets は isPlaying() で止まるが念のため）
+    bullets = [];
+    if (spawner) { spawner.paused = true; }
 
     // ベスト更新時のみ送信（>0）
     if (score > 0 && Math.floor(score) > Math.floor(bestScore)) {
@@ -225,6 +247,9 @@ export async function boot(conf, V = "") {
   }
 
   function applyZoneLogic(dt) {
+    // ★ gameover 中はゾーン更新・状態遷移しない（ここが重要）
+    if (state === "gameover") return;
+
     const inSafe  = safeZones.playerInside(player.x, player.y, player.hitR);
     const inBonus = !inSafe && bonusZone.playerInside(player.x, player.y);
     let nextState = inSafe ? "safe" : (inBonus ? "bonus" : "playing");
@@ -245,6 +270,9 @@ export async function boot(conf, V = "") {
   }
 
   function updateBullets(dt) {
+    // ★ isPlaying() でしか呼ばれないが、念のため gameover を弾く
+    if (state === "gameover") return;
+
     spawner.update(dt, gameTime, bullets, player);
     const speedScale = (config.tuning && config.tuning.bulletSpeedScale) ?? 1;
     const bdt = dt * speedScale;
@@ -294,10 +322,10 @@ export async function boot(conf, V = "") {
 
   if (rankClient.enabled) refreshTop();
 
-  // 入力
+  // 入力（タイトル開始／ゲームオーバー復帰／デバッグ）
   input = new Input(canvas);
-  canvas.addEventListener("pointerdown", async () => { if (!unlocked) { await aud.unlock(); unlocked = true; } }, { passive: true });
-  addEventListener("keydown", (e) => { if (e.key === "Enter" && state === "title") startGame(); if (e.key === "F2") showDebug = !showDebug; });
+  canvas.addEventListener("pointerdown", onTapOrStart, { passive: true });
+  addEventListener("keydown", onKey);
 
   // ループ開始
   requestAnimationFrame(loop);
