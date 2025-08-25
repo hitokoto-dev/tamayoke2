@@ -25,12 +25,17 @@
   </div>
   <div class="brand">tamayoke2</div>
 
-  <!-- 本番ブート -->
-  <script type="module">
-    const V = "rank-20250825-11";  // ←新しい値にする
-    window.V = V;                   // ←★これが重要（main.js が参照）
+  <!-- 先にバージョンと rank API を“明示的に”公開スコープへ -->
+  <script>
+    const V = "rank-20250825-12";                     /* ★更新して保存 */
+    window.V = V;                                     /* main.js が参照 */
+    window.RANK_ENDPOINT =
+      "https://script.google.com/macros/s/AKfycbxvQ-miSQfyYy2fEmeNstkb-WiHMtTeuJjl2KzuklxYc1UOeytF6F-O1KX1waNZ8QUO2w/exec";
+  </script>
 
-    import "./js/main.js?v=" + encodeURIComponent(V);
+  <!-- 本体のモジュール読み込み -->
+  <script type="module">
+    import "./js/main.js?v=" + encodeURIComponent(window.V);
   </script>
 </body>
 </html>
