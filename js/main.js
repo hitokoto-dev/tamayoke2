@@ -8,9 +8,9 @@ export async function boot(conf, V = "") {
       import(withV("./audioManager.js")),
       import(withV("./input.js")),
       import(withV("./player.js")),
-      import(withV("./bullets.js")),    // { loadBulletSprites, ... }
+      import(withV("./bullets.js")),
       import(withV("./spawner.js")),
-      import(withV("./zones.js")),      // { SafeZones, BonusZone }
+      import(withV("./zones.js")),
       import(withV("./rank.js")),
     ]);
 
@@ -61,7 +61,6 @@ export async function boot(conf, V = "") {
   function drawBG(dt) {
     const speed = config.background.scrollSpeed;
     const loopH = config.background.height;
-    // ★ 下方向へ流れるように（逆方向修正済み）
     bgY = (bgY - speed * dt + loopH) % loopH;
     const half = loopH / 2;
     const y1 = Math.floor(-bgY / 2);
@@ -101,7 +100,7 @@ export async function boot(conf, V = "") {
     // 右上スコア（右端固定・等幅）
     drawScoreStable(g, W - 12, 12 + 28, "SCORE ", String(Math.floor(score)).padStart(6, "0"));
 
-    // 左上 BEST/TIME（TIMEはタイトル/ゲーム時で使い分け）
+    // 左上 BEST/TIME
     g.textAlign = "left";
     g.fillText(`BEST ${String(Math.floor(bestScore)).padStart(6, "0")}`, 12, 40);
     g.globalAlpha = 0.55;
@@ -109,15 +108,14 @@ export async function boot(conf, V = "") {
     g.globalAlpha = 1;
 
     if (state === "title") {
-      // タイトル表示
       g.fillStyle = "rgba(255,255,255,0.92)";
       g.font = "700 36px Orbitron, system-ui";
       g.textAlign = "center";
       g.fillText("Tap to Start", W/2, H/2 - 6);
       g.font = "400 16px Noto Sans JP, system-ui";
-      g.fillText("ドラッグ／WASD／矢印で移動。Shift/Spaceで低速。F2でデバッグ表示", W/2, H/2 + 22);
+      g.fillText("ドラッグ／WASD／矢印で移動。Shift/Space低速。F2でデバッグ", W/2, H/2 + 22);
 
-      // 右側にランキングTop10
+      // ランキングTop10
       g.textAlign = "right";
       g.font = "700 18px Orbitron, system-ui";
       g.fillStyle = "#ffffff";
@@ -138,7 +136,6 @@ export async function boot(conf, V = "") {
           g.fillText(`${(i+1).toString().padStart(2," ")}. ${name}  ${sc}`, W - 16, startY + lineH * (i + 1));
         }
       }
-      // プレイヤー名表示
       g.textAlign = "left";
       g.font = "400 12px system-ui";
       const pn = playerName ? `NAME: ${playerName}` : "NAME: （ベスト更新時に入力）";
@@ -153,13 +150,8 @@ export async function boot(conf, V = "") {
       g.textAlign = "center";
       g.fillText("GAME OVER", W/2, H/2 - 10);
       g.font = "400 16px Noto Sans JP, system-ui";
-      // 0.7s 経過後のみ再開案内
       const now = performance.now() / 1000;
-      if (now >= restartAt) {
-        g.fillText("タップ / Space / Enter でタイトルへ", W/2, H/2 + 20);
-      } else {
-        g.fillText("…", W/2, H/2 + 20);
-      }
+      g.fillText(now >= restartAt ? "タップ / Space / Enter でタイトルへ" : "…", W/2, H/2 + 20);
     }
 
     if (showDebug) {
@@ -174,9 +166,7 @@ export async function boot(conf, V = "") {
   }
 
   // ===== 入力 =====
-  function canRestartNow() {
-    return performance.now() / 1000 >= restartAt;
-  }
+  function canRestartNow() { return performance.now() / 1000 >= restartAt; }
   function onTapOrStart() {
     if (!unlocked) { aud.unlock().catch(()=>{}); unlocked = true; }
     if (state === "title") startGame();
@@ -203,9 +193,8 @@ export async function boot(conf, V = "") {
   function toTitle() {
     state = "title";
     bullets = [];
-    // タイトルBGM（仕様に合わせて safe を使用）
     aud.playBgm("safe");
-    refreshTop(); // タイトルに戻ったらTop10を取り直す
+    refreshTop();
   }
 
   async function maybeSubmitBest(newScore) {
@@ -213,7 +202,7 @@ export async function boot(conf, V = "") {
     try {
       if (!playerName) {
         const nm = prompt("ランキング名（16文字まで）を入力してください", "YOU");
-        if (!nm) return; // キャンセルなら送信しない
+        if (!nm) return;
         playerName = nm.trim().slice(0, 16);
         localStorage.setItem("playerName", playerName);
       }
@@ -226,19 +215,14 @@ export async function boot(conf, V = "") {
   }
 
   function gameOver() {
-    // ★ 既に gameover なら何もしない
     if (state === "gameover") return;
-
     state = "gameover";
-    restartAt = performance.now() / 1000 + 0.7; // ★ 0.7s 後からタイトルへ戻れる
+    restartAt = performance.now() / 1000 + 0.7;
     aud.playBgm("gameover");
     if (config.audio?.sfx?.explode) aud.playSfx(config.audio.sfx.explode);
-
-    // ★ 画面上の弾をクリア & スポーン休止（updateBullets は isPlaying() で止まるが念のため）
     bullets = [];
-    if (spawner) { spawner.paused = true; }
+    if (spawner) spawner.paused = true;
 
-    // ベスト更新時のみ送信（>0）
     if (score > 0 && Math.floor(score) > Math.floor(bestScore)) {
       bestScore = Math.floor(score);
       localStorage.setItem("bestScore", String(bestScore));
@@ -247,7 +231,6 @@ export async function boot(conf, V = "") {
   }
 
   function applyZoneLogic(dt) {
-    // ★ gameover 中はゾーン更新・状態遷移しない（ここが重要）
     if (state === "gameover") return;
 
     const inSafe  = safeZones.playerInside(player.x, player.y, player.hitR);
@@ -270,7 +253,6 @@ export async function boot(conf, V = "") {
   }
 
   function updateBullets(dt) {
-    // ★ isPlaying() でしか呼ばれないが、念のため gameover を弾く
     if (state === "gameover") return;
 
     spawner.update(dt, gameTime, bullets, player);
@@ -315,14 +297,14 @@ export async function boot(conf, V = "") {
   player = new Player(config);
   player.load().catch(e => console.warn("[player] load error (fallback active)", e));
 
-  await loadBulletSprites();
-  spawner   = new Spawner(config);
-  safeZones = new SafeZones(config);  await safeZones.load(config.ui?.sprites?.safe || "assets/img/zone_safe.png");
+  await loadBulletSprites();                // ← 先にスプライトを読む
+  spawner   = new Spawner(config, bulletsMod); // ← ★ 依存注入：bulletsMod を渡す
+  safeZones = new SafeZones(config);  await safeZones.load(config.ui?.sprites?.safe  || "assets/img/zone_safe.png");
   bonusZone = new BonusZone(config);  await bonusZone.load(config.ui?.sprites?.bonus || "assets/img/zone_bonus.png");
 
   if (rankClient.enabled) refreshTop();
 
-  // 入力（タイトル開始／ゲームオーバー復帰／デバッグ）
+  // 入力
   input = new Input(canvas);
   canvas.addEventListener("pointerdown", onTapOrStart, { passive: true });
   addEventListener("keydown", onKey);
