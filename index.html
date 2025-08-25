@@ -30,21 +30,22 @@
 
 <script>
 /* ==========================================================
-   tamayoke2 — assets/img + assets/audio 対応単一ファイル版
-   ・今回の修正：
-     - セーフゾーン画像は等倍スケールでタイル（縦横比保持）
-     - ボーナス半径を 96 に拡大
-     - 通常弾（白）を減速（vy 90〜120）
-     - 360度ばら撒き（リング）を完全廃止
+   tamayoke2 — 単一ファイル版
+   変更点：
+   - Playerは回転禁止（常に前向き）
+   - セーフゾーン内は当たり判定オフ
+   - 誘導弾：累計回頭角が閾値を超えたら追尾終了
+   - ボーナス半径 144（3倍）
+   - SCOREはmonospaceで数字固定幅 → ぶれ防止
    ========================================================== */
 
 // ★キャッシュ破り（毎回変えてください）
-const V = "fix-safe-aspect-bonus-big-slow-normal-20250825-1";
+const V = "fix-rotate-safe-homing-cap-bonusx3-scorelock-20250825-1";
 
-// ★あなたの GAS /exec（直指定）
+// ★GAS /exec
 const RANK_ENDPOINT = "https://script.google.com/macros/s/AKfycbxvQ-miSQfyYy2fEmeNstkb-WiHMtTeuJjl2KzuklxYc1UOeytF6F-O1KX1waNZ8QUO2w/exec";
 
-// 画像パス（存在しなくてもOK：無ければフォールバック）
+// 画像
 const IMG_SRC = {
   bg:         "assets/img/bg_mechcity_loop.png",
   zoneSafe:   "assets/img/zone_safe.png",
@@ -55,18 +56,18 @@ const IMG_SRC = {
   b_homing:   "assets/img/bullet_homing.png",
   b_big:      "assets/img/bullet_big.png",
 };
-// BGM（実ファイル）
+// BGM
 const BGM_SRC = {
   title:  "assets/audio/bgm_title.mp3",
   play:   "assets/audio/bgm_stage1.mp3",
   result: "assets/audio/bgm_result.mp3",
 };
 
-// ---- 便利ログ（左上） ----
+// ---- ログ
 const blog = document.getElementById("bootlog");
 function bl(msg){ blog.textContent += "\n" + msg; }
 
-// ---- util ----
+// ---- util
 const bust = (url)=> url + (url.includes("?")?"&":"?") + "v=" + encodeURIComponent(V);
 
 window.addEventListener("DOMContentLoaded", () => boot().catch(e=>{bl("BOOT ERROR: "+e.message); console.error(e);} ));
@@ -82,7 +83,7 @@ async function boot(){
   function fit(){ const s=Math.min(innerWidth/W, innerHeight/H); canvas.style.width=`${(W*s)|0}px`; canvas.style.height=`${(H*s)|0}px`; }
   addEventListener("resize",fit); fit();
 
-  // ---------- 画像ローダ（?v= でキャッシュ破り） ----------
+  // ---------- 画像ローダ ----------
   const IMG = new Map();
   async function loadImage(url){ return new Promise((res,rej)=>{ const i=new Image(); i.onload=()=>res(i); i.onerror=rej; i.src=bust(url); }); }
   async function tryLoad(key,url){ try{ const img=await loadImage(url); IMG.set(key,img); bl("img ok: "+url); }catch{ bl("img miss: "+url); } }
@@ -138,7 +139,7 @@ async function boot(){
   }
   await Promise.all(Object.entries(BGM_SRC).map(([k,u])=>decodeAudio(k,u)));
 
-  // BGMプレイヤ（2chクロスフェード）
+  // BGMプレイヤ
   class BGM {
     constructor(){ this.g1=AC.createGain(); this.g2=AC.createGain(); this.g1.connect(master); this.g2.connect(master); this.s1=this.s2=null; this.which=0; this.g1.gain.value=this.g2.gain.value=0; }
     _startOn(g,buf){ const s=AC.createBufferSource(); s.buffer=buf; s.loop=true; s.connect(g); s.start(); return s; }
@@ -178,39 +179,29 @@ async function boot(){
 
   // ---------- ゾーン ----------
   const SAFE_H = 90; // 下部セーフ高さ
-  const bonus = { cx:480, cy:243, rOrbit:70, radius:96, speed:0.6 }; // ← 半径を大きく
+  const bonus = { cx:480, cy:243, rOrbit:70, radius:144, speed:0.6 }; // ← 3倍
 
   function drawZones(t){
-    // セーフ（等倍スケールでタイル＝縦横比保持）
+    // セーフ（縦横比保持で高さ合わせ→横タイル）
     const texSafe=IMG.get("zoneSafe");
     if(texSafe){
       const y=H-SAFE_H;
-      const scale = SAFE_H / texSafe.height;             // 高さ合わせ（縦横比保持）
+      const scale = SAFE_H / texSafe.height;
       const wScaled = texSafe.width * scale;
       ctx.globalAlpha=0.95;
-      for(let x=0; x<W+1; x+=wScaled){
-        ctx.drawImage(texSafe, x, y, wScaled, SAFE_H);
-      }
+      for(let x=0; x<W+1; x+=wScaled){ ctx.drawImage(texSafe, x, y, wScaled, SAFE_H); }
       ctx.globalAlpha=1;
     }else{
       ctx.fillStyle="rgba(20,200,120,0.10)"; ctx.fillRect(0,H-SAFE_H,W,SAFE_H);
     }
 
-    // ボーナス（大きめ）
+    // ボーナス（大きく）
     const ang=t*bonus.speed, bx=bonus.cx+Math.cos(ang)*bonus.rOrbit, by=bonus.cy+Math.sin(ang)*bonus.rOrbit;
     const texB=IMG.get("zoneBonus");
-    if(texB){
-      ctx.save(); ctx.translate(bx,by);
-      ctx.globalAlpha=0.95;
-      ctx.drawImage(texB, -bonus.radius, -bonus.radius, bonus.radius*2, bonus.radius*2);
-      ctx.globalAlpha=1;
-      ctx.restore();
+    if(texB){ ctx.save(); ctx.translate(bx,by); ctx.globalAlpha=0.95; ctx.drawImage(texB,-bonus.radius,-bonus.radius,bonus.radius*2,bonus.radius*2); ctx.globalAlpha=1; ctx.restore();
       ctx.strokeStyle="rgba(250,210,60,0.25)"; ctx.beginPath(); ctx.arc(bonus.cx,bonus.cy,bonus.rOrbit,0,Math.PI*2); ctx.stroke();
-    }else{
-      ctx.fillStyle="rgba(250,210,60,0.12)";
-      ctx.beginPath(); ctx.arc(bx,by,bonus.radius,0,Math.PI*2); ctx.fill();
-      ctx.strokeStyle="rgba(250,210,60,0.25)"; ctx.beginPath(); ctx.arc(bonus.cx,bonus.cy,bonus.rOrbit,0,Math.PI*2); ctx.stroke();
-    }
+    }else{ ctx.fillStyle="rgba(250,210,60,0.12)"; ctx.beginPath(); ctx.arc(bx,by,bonus.radius,0,Math.PI*2); ctx.fill();
+      ctx.strokeStyle="rgba(250,210,60,0.25)"; ctx.beginPath(); ctx.arc(bonus.cx,bonus.cy,bonus.rOrbit,0,Math.PI*2); ctx.stroke(); }
     return {bx,by};
   }
   function inCircle(px,py,cx,cy,r){ const dx=px-cx, dy=py-cy; return dx*dx+dy*dy <= r*r; }
@@ -230,17 +221,17 @@ async function boot(){
   const player={ x:W/2, y:H*0.8, size:26, hitR:10, speed:245, slow:0.5, vx:0, vy:0 };
   let bullets=[], state=TITLE, allowReturnAt=0, timePlay=0, score=0;
 
-  // ---------- 弾（リング完全廃止） ----------
-  const timers={ rain:0, side:0, homing:0, kanji:0 }; // ← ring を削除
+  // ---------- 弾 ----------
+  const timers={ rain:0, side:0, homing:0, kanji:0 }; // リング廃止済み
   function randomKanji(){ const s="炎雷風水土空光闇心愛夢星竜鬼斬破護爆迅煌零冥極華刹翔滅砲砕烈煌舞刃閃虎龍雷火光影彗".split(""); return s[(Math.random()*s.length)|0]; }
 
   function spawn(dt){
     timers.rain+=dt; timers.side+=dt; timers.homing+=dt; timers.kanji+=dt;
 
-    // 雨（白：遅く）
+    // 雨（白：遅め）
     if(timers.rain>=0.15){ timers.rain=0;
       const x=20+Math.random()*(W-40);
-      bullets.push({kind:"normal",x,y:-10,vx:0,vy:90+Math.random()*30,r:6,alive:true}); // ← 90〜120 に減速
+      bullets.push({kind:"normal",x,y:-10,vx:0,vy:90+Math.random()*30,r:6,alive:true}); // 90〜120
     }
     // 横（赤：fast）
     if(timers.side>=1.1){ timers.side=0;
@@ -249,15 +240,16 @@ async function boot(){
         bullets.push({kind:"fast",x:L?-10:W+10,y:y0+i*9,vx:L?160:-160,vy:(Math.random()*2-1)*22,r:5,alive:true});
       }
     }
-    // 誘導（青）
+    // 誘導（青）— 一定角度まで曲がったら追尾終了
     if(timers.homing>=3.6){ timers.homing=0;
       const edge=(Math.random()*4)|0; let x=0,y=0;
       if(edge===0){x=Math.random()*W;y=-10;} if(edge===1){x=W+10;y=Math.random()*H;}
       if(edge===2){x=Math.random()*W;y=H+10;} if(edge===3){x=-10;y=Math.random()*H;}
       const ang=Math.atan2(player.y-y, player.x-x), v=145;
-      bullets.push({kind:"homing",x,y,vx:Math.cos(ang)*v,vy:Math.sin(ang)*v,turnDeg:120,r:6,alive:true,homing:true});
+      bullets.push({kind:"homing",x,y,vx:Math.cos(ang)*v,vy:Math.sin(ang)*v,
+                    turnDeg:120, r:6, alive:true, homing:true, steeredDeg:0, maxSteerDeg:70});
     }
-    // 巨大（漢字風）弾
+    // 漢字弾（緩やか追尾）
     if(timers.kanji>=5.0){ timers.kanji=0;
       const x=40+Math.random()*(W-80);
       bullets.push({kind:"big",x,y:-30,vx:0,vy:95,turnDeg:60,r:24,alive:true,text:randomKanji()});
@@ -284,9 +276,11 @@ async function boot(){
         const cur=Math.atan2(b.vy,b.vx);
         const max=(b.turnDeg*Math.PI/180)*dt;
         let diff=angTo-cur; while(diff>Math.PI) diff-=Math.PI*2; while(diff<-Math.PI) diff+=Math.PI*2;
-        diff=Math.max(-max,Math.min(max,diff));
-        const next=cur+diff; const sp=Math.hypot(b.vx,b.vy)||145;
+        const clamped=Math.max(-max,Math.min(max,diff));
+        b.steeredDeg += Math.abs(clamped)*180/Math.PI;
+        const next=cur+clamped; const sp=Math.hypot(b.vx,b.vy)||145;
         b.vx=Math.cos(next)*sp; b.vy=Math.sin(next)*sp;
+        if(b.steeredDeg>=b.maxSteerDeg){ b.homing=false; } // 追尾終了 → まっすぐ外へ
       } else if (b.kind==="big"){
         const angTo=Math.atan2(player.y-b.y, player.x-b.x);
         const cur=Math.atan2(b.vy,b.vx);
@@ -300,6 +294,10 @@ async function boot(){
       if(b.x<-80||b.x>W+80||b.y<-80||b.y>H+80) b.alive=false;
     }
     bullets=bullets.filter(b=>b.alive);
+
+    // セーフゾーン内なら当たり無効
+    const inSafe = (player.y >= H - SAFE_H + player.hitR*0.5);
+    if(inSafe) return false;
 
     // 当たり
     for(const b of bullets){
@@ -320,12 +318,21 @@ async function boot(){
 
   // ---------- 描画 ----------
   function drawPlayer(){
-    const img=IMG.get("player"); const ang=Math.atan2(player.vy, player.vx)||0;
-    ctx.save(); ctx.translate(player.x,player.y); ctx.rotate(ang); const s=player.size;
+    const img=IMG.get("player");
+    const s=player.size;
+    ctx.save(); ctx.translate(player.x,player.y);
+    // ★回転しない（常に前向き）
     if(img){ ctx.drawImage(img, -s, -s, s*2, s*2); }
-    else { ctx.shadowColor="rgba(80,200,255,0.6)"; ctx.shadowBlur=20; ctx.fillStyle="#4cf"; ctx.beginPath(); ctx.moveTo(0,-s); ctx.lineTo(s*0.7,0); ctx.lineTo(0,s); ctx.lineTo(-s*0.7,0); ctx.closePath(); ctx.fill(); ctx.shadowBlur=0; ctx.strokeStyle="rgba(255,255,255,0.35)"; ctx.beginPath(); ctx.arc(0,0,player.hitR,0,Math.PI*2); ctx.stroke(); }
+    else {
+      // 前向きのダイヤ風
+      ctx.shadowColor="rgba(80,200,255,0.6)"; ctx.shadowBlur=20;
+      ctx.fillStyle="#4cf"; ctx.beginPath();
+      ctx.moveTo(0,-s); ctx.lineTo(s*0.7,0); ctx.lineTo(0,s); ctx.lineTo(-s*0.7,0); ctx.closePath(); ctx.fill();
+      ctx.shadowBlur=0; ctx.strokeStyle="rgba(255,255,255,0.35)"; ctx.beginPath(); ctx.arc(0,0,player.hitR,0,Math.PI*2); ctx.stroke();
+    }
     ctx.restore();
   }
+
   function drawBullets(){
     for(const b of bullets){
       if(b.kind==="normal"){ const sp=IMG.get("b_normal"); if(sp) ctx.drawImage(sp,b.x-b.r,b.y-b.r,b.r*2,b.r*2); else { ctx.fillStyle="#fff"; ctx.beginPath(); ctx.arc(b.x,b.y,b.r,0,Math.PI*2); ctx.fill(); } }
@@ -341,11 +348,24 @@ async function boot(){
       }
     }
   }
+
   function drawTitle(){ ctx.fillStyle="#fff"; ctx.textAlign="center"; ctx.textBaseline="middle"; ctx.font="64px Orbitron, sans-serif"; ctx.fillText("TAMAYOKE 2", W/2, H*0.33); ctx.font="18px Noto Sans JP, sans-serif"; ctx.fillText("クリック／Enter でスタート", W/2, H*0.33+56); }
   function drawGameOver(){ ctx.font="46px Orbitron, sans-serif"; ctx.textAlign="center"; ctx.textBaseline="middle"; ctx.fillStyle="#ff9"; ctx.fillText("GAME OVER", W/2, H*0.35); ctx.font="18px Noto Sans JP, sans-serif"; ctx.fillStyle="#fff"; ctx.fillText("0.7秒後に クリック／Enter でタイトルへ", W/2, H*0.35+50); }
-  function drawScore(){ const s=String(score|0).padStart(6,"0"); ctx.font="20px Orbitron, monospace"; ctx.textAlign="right"; ctx.textBaseline="top"; ctx.fillStyle="#fff"; ctx.fillText(`SCORE  ${s}`, W-16, 12); }
 
-  // ---------- 送信（初回必ず・以降ベスト時） ----------
+  // ★SCOREぶれ防止：数字はmonospaceで固定幅右寄せ
+  function drawScore(){
+    const s=String(score|0).padStart(6,"0");
+    ctx.textBaseline="top";
+    ctx.textAlign="right";
+    ctx.font="20px monospace";
+    ctx.fillStyle="#fff";
+    ctx.fillText(s, W-16, 12);
+    const w = ctx.measureText("000000").width;
+    ctx.font="20px Orbitron, sans-serif";
+    ctx.fillText("SCORE", W-16 - w - 10, 12);
+  }
+
+  // ---------- 送信 ----------
   const SUBMITTED_KEY="rankSubmittedOnce";
   const loadPlayerName = () => localStorage.getItem("playerName") || "";
   const savePlayerName = n => localStorage.setItem("playerName", String(n||"").slice(0,16));
